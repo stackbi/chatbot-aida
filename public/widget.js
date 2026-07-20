@@ -79,7 +79,7 @@
     #aida-overlay {
       position: fixed; inset: 0;
       z-index: 2147482999;
-      background: rgb(0 0 0 / .45);
+      background: rgb(0 0 0 / .6);
       backdrop-filter: blur(0px);
       -webkit-backdrop-filter: blur(0px);
       opacity: 0;
@@ -110,18 +110,20 @@
       position: relative;
       isolation: isolate;
 
-      /* Liquid Glass Premium */
-      border: 1px solid rgb(255 255 255 / .35);
+      /* Gradient Premium — fond profond aux couleurs de l'accent */
+      border: 1px solid rgb(255 255 255 / .12);
       background:
-        linear-gradient(145deg, rgb(255 255 255 / .32) 0%, rgb(255 255 255 / .10) 40%, rgb(255 255 255 / .06) 100%),
-        rgb(255 255 255 / .15);
-      backdrop-filter: blur(40px) saturate(200%) contrast(1.08);
-      -webkit-backdrop-filter: blur(40px) saturate(200%) contrast(1.08);
+        radial-gradient(ellipse 85% 60% at 10% 15%, color-mix(in srgb, var(--aida-accent) 35%, transparent) 0%, transparent 70%),
+        radial-gradient(ellipse 60% 50% at 90% 85%, color-mix(in srgb, var(--aida-accent-dark) 30%, transparent) 0%, transparent 60%),
+        radial-gradient(ellipse 50% 40% at 50% 50%, color-mix(in srgb, var(--aida-accent) 8%, transparent) 0%, transparent 80%),
+        linear-gradient(165deg, #0d0d2b 0%, #1a0d42 30%, #0f0a2e 60%, #060620 100%);
+      backdrop-filter: blur(24px) saturate(150%);
+      -webkit-backdrop-filter: blur(24px) saturate(150%);
       box-shadow:
-        inset 0 1.5px 0 rgb(255 255 255 / .55),
-        inset 0 -1px 0 rgb(255 255 255 / .15),
-        0 24px 80px rgb(0 0 0 / .3),
-        0 0 0 1px rgb(255 255 255 / .08);
+        inset 0 1px 0 rgb(255 255 255 / .12),
+        inset 0 -1px 0 rgb(255 255 255 / .06),
+        0 24px 80px rgb(0 0 0 / .45),
+        0 0 0 1px rgb(255 255 255 / .06);
 
       transform: scale(0.90) translateY(20px);
       opacity: 0;
@@ -135,16 +137,11 @@
       inset: 0;
       z-index: -1;
       border-radius: inherit;
-      /* Gradient statique subtil aux couleurs de l'accent */
+      /* Reflets lumineux sur le gradient foncé */
       background:
-        radial-gradient(ellipse 55% 30% at 20% 10%, rgb(255 255 255 / .45), transparent 65%),
-        radial-gradient(ellipse 40% 30% at 85% 95%, rgb(255 255 255 / .12), transparent 55%),
-        linear-gradient(160deg,
-          color-mix(in srgb, var(--aida-accent) 12%, transparent) 0%,
-          transparent 35%,
-          color-mix(in srgb, var(--aida-accent-dark) 8%, transparent) 65%,
-          transparent 100%
-        );
+        radial-gradient(ellipse 50% 25% at 18% 8%, rgb(255 255 255 / .20), transparent 70%),
+        radial-gradient(ellipse 30% 20% at 82% 92%, rgb(255 255 255 / .06), transparent 55%),
+        radial-gradient(ellipse 40% 30% at 55% 50%, color-mix(in srgb, var(--aida-accent) 6%, transparent), transparent 70%);
       pointer-events: none;
     }
     #aida-window::after {
@@ -167,7 +164,7 @@
     #aida-header {
       padding: 18px 44px;
       display: flex; justify-content: space-between; align-items: center;
-      border-bottom: 1px solid rgb(255 255 255 / .15);
+      border-bottom: 1px solid rgb(255 255 255 / .08);
       flex-shrink: 0;
     }
     #aida-header-left { display: flex; align-items: center; gap: 10px; }
@@ -181,13 +178,13 @@
     #aida-header-info { line-height: 1.3; }
     #aida-bot-name {
       font-weight: 700; font-size: 0.95rem;
-      color: #0d0d1a;
+      color: rgb(255 255 255 / .95);
       display: block;
-      text-shadow: 0 1px 2px rgb(255 255 255 / .3);
+      text-shadow: 0 1px 4px rgb(0 0 0 / .3);
     }
     #aida-header-status {
       font-size: 0.72rem;
-      color: #2d6b2d;
+      color: #4ade80;
       font-weight: 600;
       display: flex; align-items: center; gap: 4px;
     }
@@ -202,13 +199,13 @@
     }
     #aida-close {
       width: 32px; height: 32px; border-radius: 50%;
-      background: rgb(0 0 0 / .08); border: none;
-      color: #1a1a2e; font-size: 1rem; cursor: pointer;
+      background: rgb(255 255 255 / .1); border: none;
+      color: rgb(255 255 255 / .75); font-size: 1rem; cursor: pointer;
       font-weight: 600;
       display: flex; align-items: center; justify-content: center;
       transition: all 0.2s ease; flex-shrink: 0;
     }
-    #aida-close:hover { background: rgb(0 0 0 / .16); color: #0d0d1a; }
+    #aida-close:hover { background: rgb(255 255 255 / .2); color: rgb(255 255 255 / .95); }
 
     /* --- ZONE DE MESSAGES --- */
     #aida-messages {
@@ -218,7 +215,7 @@
     }
     #aida-messages::-webkit-scrollbar { width: 4px; }
     #aida-messages::-webkit-scrollbar-track { background: transparent; }
-    #aida-messages::-webkit-scrollbar-thumb { background: rgb(0 0 0 / .12); border-radius: 99px; }
+    #aida-messages::-webkit-scrollbar-thumb { background: rgb(255 255 255 / .15); border-radius: 99px; }
 
     .aida-msg {
       max-width: min(72%, 580px); padding: 10px 14px;
@@ -231,37 +228,37 @@
     }
     .aida-msg.aida-bot {
       align-self: flex-start;
-      background: rgb(255 255 255 / .82);
-      border: 1px solid rgb(255 255 255 / .5);
+      background: rgb(255 255 255 / .10);
+      border: 1px solid rgb(255 255 255 / .15);
       border-bottom-left-radius: 4px;
-      color: #0d0d1a;
-      backdrop-filter: blur(8px);
-      box-shadow: 0 1px 4px rgb(0 0 0 / .08);
+      color: rgb(255 255 255 / .92);
+      backdrop-filter: blur(12px);
+      box-shadow: 0 1px 4px rgb(0 0 0 / .15);
     }
     .aida-msg.aida-user {
       align-self: flex-end;
       background: var(--aida-accent); color: white;
       border-bottom-right-radius: 4px;
-      box-shadow: 0 2px 8px rgb(47 111 237 / .15);
+      box-shadow: 0 2px 12px rgb(47 111 237 / .2), 0 1px 4px rgb(0 0 0 / .15);
     }
     .aida-msg.aida-typing {
       align-self: flex-start;
-      background: rgb(255 255 255 / .6);
-      border: 1px solid rgb(255 255 255 / .35);
-      color: #3a4a5a;
+      background: rgb(255 255 255 / .08);
+      border: 1px solid rgb(255 255 255 / .12);
+      color: rgb(255 255 255 / .6);
       font-style: italic; font-weight: 500;
       display: flex; align-items: center; gap: 6px;
-      backdrop-filter: blur(4px);
+      backdrop-filter: blur(8px);
     }
     .aida-msg.aida-error {
-      color: #b3261e; background: rgb(243 200 197 / .5);
-      border: 1px solid rgb(243 200 197 / .4);
+      color: #ff8a80; background: rgb(255 0 0 / .15);
+      border: 1px solid rgb(255 0 0 / .25);
     }
 
     .aida-typing-dots { display: inline-flex; gap: 3px; }
     .aida-typing-dots span {
       width: 6px; height: 6px; border-radius: 50%;
-      background: #8a9aaa;
+      background: rgb(255 255 255 / .4);
       animation: aida-dot-bounce 1.2s ease-in-out infinite;
     }
     .aida-typing-dots span:nth-child(2) { animation-delay: 0.2s; }
@@ -274,7 +271,7 @@
     /* --- CARTE D'INVITATION --- */
     #aida-invite {
       padding: 28px 44px 20px; text-align: center;
-      border-bottom: 1px solid rgb(255 255 255 / .1);
+      border-bottom: 1px solid rgb(255 255 255 / .06);
       flex-shrink: 0;
       animation: aida-msg-in 0.5s cubic-bezier(0.16, 1, 0.3, 1);
       transition: opacity 0.3s cubic-bezier(0.16, 1, 0.3, 1),
@@ -297,12 +294,12 @@
     }
     #aida-invite h3 {
       margin: 0 0 4px; font-size: 1.05rem; font-weight: 700;
-      color: #0d0d1a;
-      text-shadow: 0 1px 2px rgb(255 255 255 / .3);
+      color: rgb(255 255 255 / .95);
+      text-shadow: 0 1px 4px rgb(0 0 0 / .3);
     }
     #aida-invite p {
       margin: 0 0 14px; font-size: 0.85rem;
-      color: #2d3748;
+      color: rgb(255 255 255 / .7);
       line-height: 1.5;
     }
     #aida-invite-actions { display: flex; gap: 8px; justify-content: center; flex-wrap: wrap; }
@@ -313,15 +310,15 @@
     }
     #aida-invite-primary { background: var(--aida-accent); color: white; box-shadow: 0 2px 8px rgb(47 111 237 / .2); }
     #aida-invite-primary:hover { transform: translateY(-1px); box-shadow: 0 4px 14px rgb(47 111 237 / .3); }
-    #aida-invite-secondary { background: rgb(0 0 0 / .1); color: #0d0d1a; }
-    #aida-invite-secondary:hover { background: rgb(0 0 0 / .16); }
+    #aida-invite-secondary { background: rgb(255 255 255 / .12); color: rgb(255 255 255 / .9); backdrop-filter: blur(4px); }
+    #aida-invite-secondary:hover { background: rgb(255 255 255 / .2); }
 
     /* --- SUGGESTION CHIPS — Design Premium --- */
     #aida-suggestions {
       display: flex; flex-wrap: wrap; gap: 7px;
       padding: 12px 44px 18px;
       flex-shrink: 0;
-      border-top: 1px solid rgb(0 0 0 / .04);
+      border-top: 1px solid rgb(255 255 255 / .06);
       position: relative;
     }
     #aida-suggestions.aida-suggestions-exit {
@@ -336,17 +333,17 @@
       font-weight: 700;
       text-transform: uppercase;
       letter-spacing: 0.06em;
-      color: rgb(0 0 0 / .3);
+      color: rgb(255 255 255 / .4);
       margin-bottom: 2px;
     }
     #aida-suggestions button {
       padding: 7px 16px;
       border-radius: 99px;
-      border: 1px solid rgb(0 0 0 / .08);
-      background: rgb(255 255 255 / .55);
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
-      color: #1a202c;
+      border: 1px solid rgb(255 255 255 / .12);
+      background: rgb(255 255 255 / .08);
+      backdrop-filter: blur(8px);
+      -webkit-backdrop-filter: blur(8px);
+      color: rgb(255 255 255 / .85);
       font-size: 0.78rem;
       font-weight: 600;
       cursor: pointer;
@@ -362,7 +359,7 @@
       opacity: 0;
       transform: translateY(6px) scale(0.95);
       animation: aida-chip-in 0.35s cubic-bezier(0.16, 1, 0.3, 1) forwards;
-      box-shadow: 0 1px 3px rgb(0 0 0 / .04);
+      box-shadow: 0 1px 3px rgb(0 0 0 / .15);
     }
     @keyframes aida-chip-in {
       from { opacity: 0; transform: translateY(6px) scale(0.95); }
@@ -373,7 +370,7 @@
       color: white;
       border-color: var(--aida-accent);
       transform: translateY(-2px);
-      box-shadow: 0 4px 14px rgb(47 111 237 / .25);
+      box-shadow: 0 4px 18px rgb(0 0 0 / .3);
     }
     #aida-suggestions button:active {
       transform: translateY(0) scale(0.97);
@@ -388,23 +385,23 @@
     /* --- PIED / FORMULAIRE --- */
     #aida-form {
       display: flex; gap: 12px; padding: 16px 44px 20px;
-      border-top: 1px solid rgb(255 255 255 / .15);
+      border-top: 1px solid rgb(255 255 255 / .08);
       flex-shrink: 0;
     }
     #aida-input {
-      flex: 1; border: 1px solid rgb(0 0 0 / .12);
+      flex: 1; border: 1px solid rgb(255 255 255 / .15);
       border-radius: 99px; padding: 12px 18px;
       font-size: 0.9rem; outline: none;
-      background: rgb(255 255 255 / .6);
-      color: #0d0d1a;
+      background: rgb(255 255 255 / .08);
+      color: rgb(255 255 255 / .92);
       transition: all 0.2s ease;
     }
     #aida-input:focus {
       border-color: var(--aida-accent);
-      background: rgb(255 255 255 / .8);
-      box-shadow: 0 0 0 3px rgb(47 111 237 / .15);
+      background: rgb(255 255 255 / .14);
+      box-shadow: 0 0 0 3px rgb(47 111 237 / .2);
     }
-    #aida-input::placeholder { color: #6b7a8a; font-weight: 500; }
+    #aida-input::placeholder { color: rgb(255 255 255 / .4); font-weight: 500; }
     #aida-send {
       width: 44px; height: 44px; border-radius: 50%;
       background: var(--aida-accent); border: none; color: white;
@@ -430,12 +427,12 @@
       cursor: pointer;
       padding: 8px 18px;
       border-radius: 99px;
-      border: 1px solid rgb(255 255 255 / .35);
-      background: rgb(255 255 255 / .88);
-      backdrop-filter: blur(12px);
-      -webkit-backdrop-filter: blur(12px);
-      box-shadow: 0 4px 16px rgb(0 0 0 / .12);
-      color: #0d0d1a;
+      border: 1px solid rgb(255 255 255 / .15);
+      background: rgb(255 255 255 / .12);
+      backdrop-filter: blur(16px);
+      -webkit-backdrop-filter: blur(16px);
+      box-shadow: 0 4px 16px rgb(0 0 0 / .25);
+      color: rgb(255 255 255 / .9);
       font-size: 0.78rem;
       font-weight: 600;
       font-family: var(--aida-font-family, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif);
@@ -455,8 +452,9 @@
     }
     #aida-scroll-bottom:hover {
       transform: translateX(-50%) translateY(-2px);
-      box-shadow: 0 6px 22px rgb(0 0 0 / .18);
-      background: rgb(255 255 255 / .95);
+      box-shadow: 0 6px 22px rgb(0 0 0 / .35);
+      background: rgb(255 255 255 / .2);
+      border-color: rgb(255 255 255 / .25);
     }
     #aida-scroll-bottom:active {
       transform: translateX(-50%) translateY(0);
@@ -659,14 +657,18 @@
 
     /* --- ACCESSIBILITÉ --- */
     @media (prefers-reduced-transparency: reduce) {
-      #aida-overlay { background: rgb(0 0 0 / .35); backdrop-filter: none; }
+      #aida-overlay { background: rgb(0 0 0 / .5); backdrop-filter: none; }
       #aida-window {
-        background: rgb(245 247 250 / .98);
+        background: #0d0d2b;
         backdrop-filter: none; -webkit-backdrop-filter: none;
-        border: 1px solid rgb(0 0 0 / .08);
-        box-shadow: 0 8px 30px rgb(0 0 0 / .15);
+        border: 1px solid rgb(255 255 255 / .12);
+        box-shadow: 0 8px 30px rgb(0 0 0 / .35);
       }
       #aida-window::before, #aida-window::after { display: none; }
+      .aida-msg.aida-bot { background: rgb(255 255 255 / .15); }
+      #aida-input { background: rgb(255 255 255 / .12); }
+      #aida-suggestions button { background: rgb(255 255 255 / .12); }
+      #aida-scroll-bottom { background: rgb(255 255 255 / .18); }
     }
     @media (prefers-reduced-motion: reduce) {
       #aida-overlay, #aida-window { transition: none; }
@@ -742,6 +744,7 @@
 
   let isOpen = false;
   let hasShownInvite = false;
+  let welcomeShown = false;
   let suggestions = [];
   let suggestionsLoaded = false;
 
@@ -873,6 +876,9 @@
   }
 
   function showInviteCard() {
+    // Évite les doublons : si une carte d'invite existe déjà, ne pas en créer une autre
+    if (document.getElementById("aida-invite")) return;
+
     const invite = document.createElement("div");
     invite.id = "aida-invite";
     invite.innerHTML = `
@@ -893,6 +899,7 @@
       inputEl.placeholder = "Que puis-je faire pour vous ?";
     });
     invite.querySelector("#aida-invite-secondary").addEventListener("click", () => {
+      hasShownInvite = true;
       fadeOutInvite(invite).then(() => {
         showWelcomeMessage();
         setTimeout(showSuggestionChips, 400);
@@ -901,6 +908,9 @@
   }
 
   function showWelcomeMessage() {
+    if (welcomeShown) return; // Évite les doublons en cas de double-clic rapide
+    welcomeShown = true;
+    hasShownInvite = true;
     addMessage(
       "Ravie de vous rencontrer ! Je suis IA Aïda, votre assistante dédiée. Je peux vous renseigner sur nos services, vous orienter vers les bonnes ressources, ou répondre à toutes vos questions. Que souhaitez-vous explorer ?",
       "bot"
