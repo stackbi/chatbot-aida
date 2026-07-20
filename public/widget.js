@@ -220,6 +220,7 @@
     .aida-msg {
       max-width: min(72%, 580px); padding: 10px 14px;
       font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap;
+      border-radius: 12px;
       animation: aida-msg-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     }
     @keyframes aida-msg-in {
@@ -228,18 +229,40 @@
     }
     .aida-msg.aida-bot {
       align-self: flex-start;
-      background: rgb(255 255 255 / .10);
-      border: 1px solid rgb(255 255 255 / .15);
-      border-bottom-left-radius: 4px;
+      position: relative;
+      isolation: isolate;
+      overflow: hidden;
+      background:
+        radial-gradient(ellipse 80% 50% at 15% 20%, color-mix(in srgb, var(--aida-accent) 12%, transparent) 0%, transparent 70%),
+        radial-gradient(ellipse 50% 40% at 85% 80%, color-mix(in srgb, var(--aida-accent-dark) 8%, transparent) 0%, transparent 60%),
+        rgb(255 255 255 / .08);
+      border: 1px solid rgb(255 255 255 / .12);
       color: rgb(255 255 255 / .92);
-      backdrop-filter: blur(12px);
-      box-shadow: 0 1px 4px rgb(0 0 0 / .15);
+      backdrop-filter: blur(16px) saturate(140%);
+      -webkit-backdrop-filter: blur(16px) saturate(140%);
+      box-shadow:
+        inset 0 1px 0 rgb(255 255 255 / .10),
+        0 4px 16px rgb(0 0 0 / .18),
+        0 1px 4px rgb(0 0 0 / .12);
+    }
+    .aida-msg.aida-bot::before {
+      content: "";
+      position: absolute;
+      inset: 0;
+      z-index: -1;
+      border-radius: inherit;
+      background:
+        radial-gradient(ellipse 60% 30% at 20% 10%, rgb(255 255 255 / .12), transparent 70%),
+        radial-gradient(ellipse 20% 15% at 80% 90%, rgb(255 255 255 / .04), transparent 55%);
+      pointer-events: none;
     }
     .aida-msg.aida-user {
       align-self: flex-end;
       background: var(--aida-accent); color: white;
-      border-bottom-right-radius: 4px;
-      box-shadow: 0 2px 12px rgb(47 111 237 / .2), 0 1px 4px rgb(0 0 0 / .15);
+      box-shadow:
+        0 2px 12px rgb(47 111 237 / .2),
+        0 1px 4px rgb(0 0 0 / .15),
+        0 0 24px color-mix(in srgb, var(--aida-accent) 25%, transparent);
     }
     .aida-msg.aida-typing {
       align-self: flex-start;
@@ -665,7 +688,13 @@
         box-shadow: 0 8px 30px rgb(0 0 0 / .35);
       }
       #aida-window::before, #aida-window::after { display: none; }
-      .aida-msg.aida-bot { background: rgb(255 255 255 / .15); }
+      .aida-msg.aida-bot {
+        background: rgb(255 255 255 / .15);
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+        box-shadow: 0 1px 4px rgb(0 0 0 / .2);
+      }
+      .aida-msg.aida-bot::before { display: none; }
       #aida-input { background: rgb(255 255 255 / .12); }
       #aida-suggestions button { background: rgb(255 255 255 / .12); }
       #aida-scroll-bottom { background: rgb(255 255 255 / .18); }
