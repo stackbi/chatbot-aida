@@ -1,0 +1,41 @@
+<!DOCTYPE html>
+<html lang="fr">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Test d'intégration du widget</title>
+<style>
+  body {
+    margin: 0; font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    background: #eef2f5; color: #16202a; min-height: 100vh;
+    display: flex; align-items: center; justify-content: center; padding: 24px;
+  }
+  .box { max-width: 560px; text-align: center; }
+  .box h1 { font-size: 1.4rem; margin-bottom: 6px; }
+  .box p { color: #5a6b7a; font-size: 0.95rem; }
+  .box a { color: #2f6fed; }
+  code {
+    background: #dfe6ec; padding: 2px 6px; border-radius: 4px; font-size: 0.85rem;
+  }
+</style>
+</head>
+<body>
+
+<div class="box">
+  <h1>Page de test</h1>
+  <p>
+    Cette page simule à quoi ressemblera ton vrai site une fois le widget installé.
+    Elle charge exactement le même <code>&lt;script&gt;</code> que tu colleras sur ton site réel —
+    aucune autre intégration n'est nécessaire.
+  </p>
+  <p>Gère la clé API et le contenu du bot depuis <a href="/admin">le tableau de bord admin</a>.</p>
+</div>
+
+<!--
+  C'est EXACTEMENT ce tag qu'il faut copier-coller sur ton vrai site (juste avant </body>),
+  même s'il est hébergé sur un domaine complètement différent de ce backend.
+-->
+<script src="/widget.js" defer></script>
+
+</body>
+</html>
