@@ -80,11 +80,11 @@
       position: fixed; inset: 0;
       z-index: 2147482999;
       background: rgb(0 0 0 / .45);
-      backdrop-filter: blur(6px);
-      -webkit-backdrop-filter: blur(6px);
+      backdrop-filter: blur(0px);
+      -webkit-backdrop-filter: blur(0px);
       opacity: 0;
       visibility: hidden;
-      transition: opacity 0.4s ease, visibility 0s 0.45s;
+      transition: opacity 0.4s ease, backdrop-filter 0.4s ease, -webkit-backdrop-filter 0.4s ease, visibility 0s 0.45s;
       display: flex;
       align-items: center;
       justify-content: center;
@@ -93,7 +93,9 @@
     #aida-overlay.aida-open {
       opacity: 1;
       visibility: visible;
-      transition: opacity 0.3s ease, visibility 0s 0s;
+      backdrop-filter: blur(12px);
+      -webkit-backdrop-filter: blur(12px);
+      transition: opacity 0.35s ease, backdrop-filter 0.35s ease, -webkit-backdrop-filter 0.35s ease, visibility 0s 0s;
     }
 
     /* --- POPUP CHAT (Liquid Glass Immersif) --- */
@@ -511,8 +513,6 @@
       #aida-overlay {
         padding: 0;
         align-items: flex-end;
-        backdrop-filter: blur(8px);
-        -webkit-backdrop-filter: blur(8px);
       }
       #aida-window {
         max-width: 100%;
