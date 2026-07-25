@@ -48,7 +48,7 @@ setInterval(() => {
 }, 30 * 60 * 1000);
 
 // ---------------------------------------------------------------------------
-// Rate limiting pour les requêtes publiques de l'IA Aïda afin d'éviter les abus
+// Rate limiting pour les requêtes publiques d'Aïda afin d'éviter les abus
 // ---------------------------------------------------------------------------
 const chatLimiter = rateLimit({
   windowMs: 15 * 60 * 1000, // 15 minutes
