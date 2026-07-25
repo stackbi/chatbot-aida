@@ -3,7 +3,7 @@
 <head>
   <meta charset="UTF-8">
   <meta name="viewport" content="width=device-width, initial-scale=1.0">
-  <title>IA Aïda — Démo d'intégration</title>
+  <title>Aïda — Démo d'intégration</title>
   <!-- Modern Font from Google Fonts -->
   <link rel="preconnect" href="https://fonts.googleapis.com">
   <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -258,6 +258,27 @@
       position: relative;
     }
 
+    /* --- RESPONSIVE MEDIA QUERIES --- */
+    @media (max-width: 900px) {
+      .hero h1 { font-size: 2.5rem; }
+      .hero p { font-size: 1rem; }
+      main { padding: 40px 16px 80px; }
+      .integration-box { padding: 24px 20px; }
+    }
+
+    @media (max-width: 600px) {
+      header { padding: 16px 16px; }
+      .logo { font-size: 1.25rem; }
+      .nav-btn { padding: 8px 14px; font-size: 0.82rem; }
+      .hero h1 { font-size: 1.95rem; }
+      .hero p { font-size: 0.92rem; }
+      .badge { font-size: 0.72rem; padding: 4px 12px; }
+      .integration-box { padding: 18px 14px; border-radius: 14px; }
+      .code-wrapper { padding: 14px 14px; }
+      .code-wrapper code { font-size: 0.78rem; white-space: pre-wrap; word-break: break-all; }
+      .features { grid-template-columns: 1fr; gap: 16px; }
+    }
+
     @media (max-width: 768px) {
       .hero h1 { font-size: 2.5rem; }
     }
@@ -270,7 +291,7 @@
 
   <header>
     <div class="logo">
-      <span>🤖</span> IA Aïda
+      <span>🤖</span> Aïda
     </div>
     <a href="/admin" class="nav-btn">
       <span>⚙️</span> Accéder à l'Admin
@@ -280,7 +301,7 @@
   <main>
     <section class="hero">
       <div class="badge">Environnement de Démo</div>
-      <h1>Intégration de l'<span>IA Aïda</span> sur votre site</h1>
+      <h1>Intégration d'<span>Aïda</span> sur votre site</h1>
       <p>Ceci est une page de simulation qui montre le widget en action. Vous pouvez le configurer et l'entraîner en temps réel depuis le panneau d'administration.</p>
     </section>
 
@@ -289,7 +310,7 @@
       <p>Pour installer ce widget sur n'importe quel site web, il suffit de copier-coller cette ligne juste avant la balise de fermeture &lt;/body&gt; :</p>
       <div class="code-wrapper">
         <code>
-          <span class="code-comment">&lt;!-- Script IA Aïda --&gt;</span><br>
+          <span class="code-comment">&lt;!-- Script Aïda --&gt;</span><br>
           &lt;<span class="code-keyword">script</span> <span class="code-attr">src</span>=<span class="code-string">"http://localhost:3000/widget.js"</span> <span class="code-attr">defer</span>&gt;&lt;/<span class="code-keyword">script</span>&gt;
         </code>
       </div>
@@ -305,7 +326,7 @@
         transition: all 0.3s ease;
       " onmouseover="this.style.transform='translateY(-3px)'; this.style.boxShadow='0 12px 40px rgba(99, 102, 241, 0.4)'"
          onmouseout="this.style.transform='translateY(0)'; this.style.boxShadow='0 8px 30px rgba(99, 102, 241, 0.3)'">
-        ⚙️ Configurer IA Aïda
+        ⚙️ Configurer Aïda
       </a>
     </div>
 
@@ -331,7 +352,7 @@
   </main>
 
   <footer>
-    &copy; 2026 Apex Studio &bull; IA Aïda — Assistant intelligent prêt pour la production
+    &copy; 2026 Apex Studio &bull; Aïda — Assistant intelligent prêt pour la production
   </footer>
 
   <!-- Inclusion automatique du widget du chatbot local -->

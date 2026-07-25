@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>Tableau de bord — IA Aïda</title>
+<title>Tableau de bord — Aïda</title>
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -432,15 +432,26 @@
     margin-top: 4px;
   }
 
-  /* Responsive */
+  /* Responsive Tablet & Mobile */
+  @media (max-width: 1024px) {
+    .top-bar { padding: 0 20px; }
+    .dashboard-body { padding: 24px 16px 60px; max-width: 100%; }
+    .form-grid { grid-template-columns: 1fr; }
+    .color-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
+  }
+
   @media (max-width: 640px) {
-    .top-bar { padding: 0 16px; }
-    .dashboard-body { padding: 20px 12px 60px; }
-    .card { padding: 18px; }
+    .top-bar { padding: 0 16px; height: 56px; }
+    .top-bar h1 { font-size: 1.05rem; }
+    .dashboard-body { padding: 16px 12px 60px; }
+    .card { padding: 18px 14px; border-radius: 14px; }
+    .card-header-text h2 { font-size: 1.1rem; }
     .color-grid { grid-template-columns: 1fr; }
-    .tabs { flex-direction: column; gap: 2px; }
-    .doc-item { flex-direction: column; }
+    .tabs { flex-direction: row; overflow-x: auto; gap: 4px; border-bottom: 1px solid var(--border); padding-bottom: 2px; }
+    .tab-btn { padding: 8px 14px; font-size: 0.82rem; white-space: nowrap; flex-shrink: 0; }
+    .doc-item { flex-direction: column; align-items: flex-start; gap: 8px; }
     .doc-item .btn-danger { align-self: flex-end; }
+    #login-box { padding: 24px 18px; width: 92%; }
   }
 
   /* Reduced motion */
@@ -459,7 +470,7 @@
   <div id="login-box">
     <div class="login-brand">A</div>
     <h1>Tableau de bord</h1>
-    <p>Connectez-vous pour gérer <strong>IA Aïda</strong></p>
+    <p>Connectez-vous pour gérer <strong>Aïda</strong></p>
     <input id="login-password" type="password" placeholder="Mot de passe administrateur" />
     <button id="login-btn">Se connecter</button>
     <div id="login-error"></div>
@@ -472,7 +483,7 @@
   <div class="top-bar">
     <div class="top-bar-left">
       <div class="top-bar-brand">A</div>
-      <h1>IA Aïda <span>· Tableau de bord</span></h1>
+      <h1>Aïda <span>· Tableau de bord</span></h1>
     </div>
 
   </div>
@@ -525,7 +536,7 @@
         <div class="form-grid">
           <div class="form-group">
             <label for="set-botname">Nom de l'assistant</label>
-            <input id="set-botname" type="text" placeholder="IA Aïda" />
+            <input id="set-botname" type="text" placeholder="Aïda" />
           </div>
           <div class="form-group">
             <label for="set-welcome">Message d'accueil</label>
@@ -735,7 +746,7 @@
         : 'sk-ant-...';
       document.getElementById('apikey-status').textContent = s.hasApiKey
         ? '✓ Une clé API est configurée.'
-        : '⚠ Aucune clé API configurée — IA Aïda ne fonctionnera pas.';
+        : '⚠ Aucune clé API configurée — Aïda ne fonctionnera pas.';
       document.getElementById('set-model').value = s.model || '';
       document.getElementById('set-maxtokens').value = s.maxTokens || 500;
       document.getElementById('set-botname').value = s.botName || '';
