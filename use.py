@@ -1,0 +1,1 @@
+api_key = settings.openrouter_api_key
