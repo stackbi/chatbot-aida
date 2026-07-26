@@ -1,0 +1,45 @@
+# ─── Dépendances ──────────────────────────────────────────────
+node_modules/
+.pnp
+.pnp.js
+
+# ─── Environnement & secrets ─────────────────────────────────
+.env
+.env.local
+.env.production
+.env.development
+**/*.env
+
+# ─── Fichiers de données persistantes ─────────────────────────
+# data/store.json contient la clé API en clair → ne JAMAIS commiter
+data/store.json
+data/*.json
+!data/.gitkeep
+
+# ─── Scripts Python avec clés API (tests manuels) ─────────────
+*.py
+!lib/**/*.py
+
+# ─── Logs serveur ─────────────────────────────────────────────
+*.log
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# ─── OS ────────────────────────────────────────────────────────
+.DS_Store
+Thumbs.db
+*.swp
+*.swo
+*~
+
+# ─── IDE / Éditeurs ───────────────────────────────────────────
+.vscode/
+.idea/
+*.sublime-project
+*.sublime-workspace
+
+# ─── Fichiers temporaires ─────────────────────────────────────
+*.tmp
+*.temp
+/tmp/

@@ -61,13 +61,13 @@ qui tourne — pense à Railway, Render, ou Fly.io) :
 Rends-toi sur `https://mon-chatbot.up.railway.app/admin` :
 
 1. Connecte-toi avec le mot de passe admin configuré à l'étape précédente.
-2. Onglet **Paramètres** : colle ta clé API Anthropic (récupérable sur
-   https://console.anthropic.com), choisis le modèle, personnalise le nom du bot et le
+2. Onglet **Paramètres** : colle ta clé API OpenRouter (récupérable sur
+   https://openrouter.ai/keys), choisis le modèle, personnalise le nom du bot et le
    message d'accueil.
 3. Onglet **Base de connaissances** : colle le contenu de tes pages (FAQ, horaires, tarifs,
    présentation de l'entreprise...). Chaque document est découpé en passages ; à chaque
    question d'un visiteur, le backend retrouve les passages pertinents et les injecte dans
-   le prompt envoyé à Claude avant de générer la réponse.
+   le prompt envoyé au modèle avant de générer la réponse.
 
 ## Étape 3 — Installer le widget sur ton vrai site
 
@@ -82,7 +82,7 @@ C'est tout — aucune autre étape. Le widget va automatiquement :
 - afficher la bulle de chat flottante ;
 - charger le nom du bot et le message d'accueil configurés dans l'admin ;
 - envoyer chaque question à `/api/chat` sur ton backend, qui va chercher le contexte
-  pertinent (RAG) et interroger Claude.
+  pertinent (RAG) et interroger le modèle d'IA choisi.
 
 Options facultatives sur le tag script :
 ```html
@@ -108,7 +108,7 @@ npm start
 Pas de base de données vectorielle ni de service d'embeddings externe : la recherche de
 contexte (`lib/retrieval.js`) utilise une correspondance par mots-clés (fréquence de termes,
 insensible aux accents et à la casse). C'est volontairement simple pour ne dépendre que de
-ta clé API Anthropic, et ça fonctionne bien pour une base de quelques dizaines de documents.
+ta clé API OpenRouter, et ça fonctionne bien pour une base de quelques dizaines de documents.
 
 **Limite à connaître** : pas de compréhension sémantique fine (un synonyme absent du texte
 source peut ne pas être retrouvé). Pour un site avec beaucoup de contenu ou un besoin de
