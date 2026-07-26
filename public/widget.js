@@ -814,10 +814,16 @@
   const avatarEl = win.querySelector("#aida-avatar");
 
   // ─── Session ─────────────────────────────────────────────────────────────
-  let sessionId = sessionStorage.getItem("aida-session-id");
-  if (!sessionId) {
+  let sessionId;
+  try {
+    sessionId = sessionStorage.getItem("aida-session-id");
+    if (!sessionId) {
+      sessionId = "session-" + Math.random().toString(36).slice(2);
+      sessionStorage.setItem("aida-session-id", sessionId);
+    }
+  } catch (e) {
+    // sessionStorage indisponible (ex: Safari navigation privée) → fallback mémoire
     sessionId = "session-" + Math.random().toString(36).slice(2);
-    sessionStorage.setItem("aida-session-id", sessionId);
   }
 
   let isOpen = false;
