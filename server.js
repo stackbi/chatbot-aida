@@ -38,6 +38,243 @@ const OR_HEADERS = {
   "X-Title": "Aïda Chatbot"
 };
 
+// Liste des modèles de fallback en cas de rate limit (429)
+const FALLBACK_MODELS = ["openrouter/free"];
+
+/**
+ * Fait un appel API OpenAI-compatible vers une URL donnée.
+ * Retourne { ok, data, modelUsed, errText, status }.
+ */
+async function apiCall({ baseUrl, apiKey, model, messages, maxTokens, extraHeaders }) {
+  const headers = {
+    "Content-Type": "application/json",
+    // N'ajoute le header Authorization que si une clé est fournie
+    // (utile pour Ollama/localhost qui n'en nécessite pas)
+    ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {}),
+    ...(extraHeaders || {})
+  };
+
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens || 800,
+        messages
+      })
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      return { ok: true, data, modelUsed: data.model || model };
+    }
+
+    const errText = await response.text();
+    return { ok: false, status: response.status, errText };
+  } catch (err) {
+    console.error(`Erreur réseau API (${baseUrl}):`, err.message);
+    return { ok: false, status: 503, errText: err.message || "Erreur réseau" };
+  }
+}
+
+/**
+ * Appelle l'API OpenRouter avec fallback automatique et exponential backoff.
+ * Chaîne de fallback 100% gratuite :
+ *   1. Modèle configuré (via OpenRouter, défaut: openrouter/free)
+ *   2. openrouter/free (fallback auto OpenRouter)
+ *   3. Groq (free tier très généreux, si clé dispo)
+ *   4. SiliconFlow (DeepSeek/Qwen gratuits, si clé dispo)
+ *   5. API personnalisée (Ollama/vLLM en local, si URL configurée)
+ *   6. OpenAI gpt-4o-mini (payant, si clé dispo — fallback ultime)
+ */
+async function callOpenRouterWithFallback({ apiKey, model, messages, maxTokens, groqApiKey, siliconflowApiKey, customApiUrl, customApiKey, customApiModel, openaiApiKey }) {
+  // ── Phase 1 : essayer les modèles OpenRouter ──
+  const modelsToTry = [model];
+  for (const fb of FALLBACK_MODELS) {
+    if (fb !== model) modelsToTry.push(fb);
+  }
+
+  for (let i = 0; i < modelsToTry.length; i++) {
+    const currentModel = modelsToTry[i];
+
+    // Exponential backoff avant chaque fallback (sauf le premier essai)
+    if (i > 0) {
+      const delayMs = Math.min(500 * Math.pow(2, i - 1), 8000);
+      console.warn(`⏳ Attente ${delayMs}ms avant fallback vers ${currentModel}...`);
+      await new Promise(r => setTimeout(r, delayMs));
+    }
+
+    const result = await apiCall({
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey,
+      model: currentModel,
+      messages,
+      maxTokens,
+      extraHeaders: OR_HEADERS
+    });
+
+    if (result.ok) {
+      return {
+        ok: true,
+        data: result.data,
+        modelUsed: result.modelUsed,
+        fallbackUsed: i > 0,
+        originalModel: model
+      };
+    }
+
+    // Rate limit — on essaye le modèle OpenRouter suivant si disponible
+    if (result.status === 429 && i < modelsToTry.length - 1) {
+      console.warn(`Rate limit OpenRouter sur ${currentModel}, fallback vers ${modelsToTry[i + 1]}`);
+      continue;
+    }
+
+    // 429 et plus de fallback OpenRouter → on passe aux fallbacks externes
+    if (result.status === 429 && i >= modelsToTry.length - 1) {
+      console.warn(`Rate limit OpenRouter sur tous les modèles, passage aux fallbacks externes`);
+      break;
+    }
+
+    // Autre erreur → on remonte l'erreur
+    return { ok: false, status: result.status, errText: result.errText };
+  }
+
+  // Compteur de tentatives pour le backoff exponentiel
+  let attemptCount = modelsToTry.length;
+
+  // ── Phase 2 : fallback Groq (gratuit, ultra-rapide) ──
+  if (groqApiKey) {
+    attemptCount++;
+    const delayMs = Math.min(500 * Math.pow(2, attemptCount - 1), 8000);
+    console.warn(`⏳ Attente ${delayMs}ms avant fallback Groq...`);
+    await new Promise(r => setTimeout(r, delayMs));
+
+    const result = await apiCall({
+      baseUrl: "https://api.groq.com/openai/v1",
+      apiKey: groqApiKey,
+      model: "llama-3.3-70b-versatile",
+      messages,
+      maxTokens
+    });
+
+    if (result.ok) {
+      return {
+        ok: true,
+        data: result.data,
+        modelUsed: `${result.modelUsed} (Groq fallback)`,
+        fallbackUsed: true,
+        originalModel: model
+      };
+    }
+
+    if (result.status !== 429) {
+      console.error("Erreur Groq:", result.errText);
+      return { ok: false, status: result.status, errText: result.errText };
+    }
+    // 429 → continue vers le fallback suivant
+    console.warn("Rate limit Groq, passage au fallback suivant");
+  }
+
+  // ── Phase 3 : fallback SiliconFlow (DeepSeek/Qwen gratuits) ──
+  if (siliconflowApiKey) {
+    attemptCount++;
+    const delayMs = Math.min(500 * Math.pow(2, attemptCount - 1), 8000);
+    console.warn(`⏳ Attente ${delayMs}ms avant fallback SiliconFlow...`);
+    await new Promise(r => setTimeout(r, delayMs));
+
+    const result = await apiCall({
+      baseUrl: "https://api.siliconflow.cn/v1",
+      apiKey: siliconflowApiKey,
+      model: "deepseek-ai/DeepSeek-V3",
+      messages,
+      maxTokens
+    });
+
+    if (result.ok) {
+      return {
+        ok: true,
+        data: result.data,
+        modelUsed: `${result.modelUsed} (SiliconFlow fallback)`,
+        fallbackUsed: true,
+        originalModel: model
+      };
+    }
+
+    if (result.status !== 429) {
+      console.error("Erreur SiliconFlow:", result.errText);
+      return { ok: false, status: result.status, errText: result.errText };
+    }
+    // 429 → continue vers le fallback suivant
+    console.warn("Rate limit SiliconFlow, passage au fallback suivant");
+  }
+
+  // ── Phase 4 : fallback API personnalisée ──
+  if (customApiUrl) {
+    attemptCount++;
+    const delayMs = Math.min(500 * Math.pow(2, attemptCount - 1), 8000);
+    console.warn(`⏳ Attente ${delayMs}ms avant fallback vers API personnalisée...`);
+    await new Promise(r => setTimeout(r, delayMs));
+
+    const result = await apiCall({
+      baseUrl: customApiUrl.replace(/\/+$/, ""),
+      apiKey: customApiKey || "",
+      model: customApiModel || "llama3.1-8b",
+      messages,
+      maxTokens
+    });
+
+    if (result.ok) {
+      return {
+        ok: true,
+        data: result.data,
+        modelUsed: `${result.modelUsed} (API personnalisée fallback)`,
+        fallbackUsed: true,
+        originalModel: model
+      };
+    }
+
+    if (result.status !== 429) {
+      console.error("Erreur API personnalisée:", result.errText);
+      return { ok: false, status: result.status, errText: result.errText };
+    }
+    // 429 → continue vers OpenAI
+    console.warn("Rate limit API personnalisée, passage au fallback suivant");
+  }
+
+  // ── Phase 4 : fallback OpenAI ──
+  if (openaiApiKey) {
+    attemptCount++;
+    const delayMs = Math.min(500 * Math.pow(2, attemptCount - 1), 8000);
+    console.warn(`⏳ Attente ${delayMs}ms avant fallback OpenAI...`);
+    await new Promise(r => setTimeout(r, delayMs));
+
+    const result = await apiCall({
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: openaiApiKey,
+      model: "gpt-4o-mini",
+      messages,
+      maxTokens
+    });
+
+    if (result.ok) {
+      return {
+        ok: true,
+        data: result.data,
+        modelUsed: "gpt-4o-mini (OpenAI fallback)",
+        fallbackUsed: true,
+        originalModel: model
+      };
+    }
+
+    console.error("Erreur API OpenAI:", result.errText);
+    return { ok: false, status: result.status, errText: result.errText };
+  }
+
+  // Aucun fallback disponible
+  return { ok: false, status: 429, errText: "Tous les modèles sont saturés ou aucun fallback configuré" };
+}
+
 // Historique de conversation en mémoire par session
 // (pour la prod : remplacer par Redis ou une base de données)
 const conversations = new Map();
@@ -89,22 +326,39 @@ app.post("/api/admin/login", (req, res) => {
 // ---------------------------------------------------------------------------
 app.get("/api/admin/settings", requireAdmin, (req, res) => {
   const settings = getSettings();
-  // On masque la clé API dans la réponse (on ne renvoie que les 6 derniers caractères)
-  const masked = settings.apiKey
-    ? "•".repeat(Math.max(settings.apiKey.length - 6, 0)) + settings.apiKey.slice(-6)
+  // Masque les clés API (6 derniers caractères visibles)
+  const maskKey = (key) => key
+    ? "•".repeat(Math.max(key.length - 6, 0)) + key.slice(-6)
     : "";
-  res.json({ ...settings, apiKey: masked, hasApiKey: !!settings.apiKey });
+
+  res.json({
+    ...settings,
+    apiKey: maskKey(settings.apiKey),
+    hasApiKey: !!settings.apiKey,
+    openaiApiKey: maskKey(settings.openaiApiKey),
+    hasOpenAiApiKey: !!settings.openaiApiKey,
+    groqApiKey: maskKey(settings.groqApiKey),
+    hasGroqApiKey: !!settings.groqApiKey,
+    siliconflowApiKey: maskKey(settings.siliconflowApiKey),
+    hasSiliconflowApiKey: !!settings.siliconflowApiKey,
+    customApiKey: maskKey(settings.customApiKey),
+    hasCustomApiKey: !!settings.customApiKey
+  });
 });
 
 app.post("/api/admin/settings", requireAdmin, (req, res) => {
-  const { apiKey, model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily } = req.body;
-  const patch = { model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily };
-  // On ne remplace la clé API que si une nouvelle valeur non masquée est envoyée
-  if (apiKey && !apiKey.includes("•")) {
-    patch.apiKey = apiKey;
-  }
+  const { apiKey, openaiApiKey, groqApiKey, siliconflowApiKey, customApiUrl, customApiKey, customApiModel, model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily } = req.body;
+  const patch = { model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily, customApiUrl, customApiModel };
+
+  // On ne remplace chaque clé que si une nouvelle valeur non masquée est envoyée
+  if (apiKey && !apiKey.includes("•")) patch.apiKey = apiKey;
+  if (openaiApiKey && !openaiApiKey.includes("•")) patch.openaiApiKey = openaiApiKey;
+  if (groqApiKey && !groqApiKey.includes("•")) patch.groqApiKey = groqApiKey;
+  if (siliconflowApiKey && !siliconflowApiKey.includes("•")) patch.siliconflowApiKey = siliconflowApiKey;
+  if (customApiKey && !customApiKey.includes("•")) patch.customApiKey = customApiKey;
+
   const updated = saveSettings(patch);
-  res.json({ ok: true, settings: { ...updated, apiKey: undefined } });
+  res.json({ ok: true, settings: { ...updated, apiKey: undefined, openaiApiKey: undefined, groqApiKey: undefined, siliconflowApiKey: undefined, customApiKey: undefined } });
 });
 
 // ---------------------------------------------------------------------------
@@ -122,34 +376,43 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
       return res.json({ ok: false, error: "Aucune clé API fournie." });
     }
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${testKey}`,
-        "Content-Type": "application/json",
-        ...OR_HEADERS
-      },
-      body: JSON.stringify({
-        model: testModel,
-        max_tokens: 10,
-        messages: [
-          { role: "user", content: "Test de connexion — réponds uniquement \"OK\"." }
-        ]
-      })
+    // Récupère les clés de fallback (saisie ou enregistrée)
+    const settings = getSettings();
+    const openAiKey = req.body.openaiApiKey || settings.openaiApiKey;
+    const groqKey = req.body.groqApiKey || settings.groqApiKey;
+    const siliconflowKey = req.body.siliconflowApiKey || settings.siliconflowApiKey;
+    const customUrl = req.body.customApiUrl || settings.customApiUrl;
+    const customKey = req.body.customApiKey || settings.customApiKey;
+    const customModel = req.body.customApiModel || settings.customApiModel || "llama3.1-8b";
+
+    const result = await callOpenRouterWithFallback({
+      apiKey: testKey,
+      model: testModel,
+      messages: [
+        { role: "user", content: "Test de connexion — réponds uniquement \"OK\"." }
+      ],
+      maxTokens: 10,
+      groqApiKey: groqKey,
+      siliconflowApiKey: siliconflowKey,
+      customApiUrl: customUrl,
+      customApiKey: customKey,
+      customApiModel: customModel,
+      openaiApiKey: openAiKey
     });
 
-    if (response.ok) {
-      const data = await response.json();
-      const reply = data.choices?.[0]?.message?.content || "";
-      const modelUsed = data.model || testModel;
+    if (result.ok) {
+      const reply = result.data.choices?.[0]?.message?.content || "";
+      const modelUsed = result.modelUsed || testModel;
       res.json({
         ok: true,
-        message: `Connexion réussie avec ${modelUsed}`,
+        message: `Connexion réussie avec ${modelUsed}${result.fallbackUsed ? ` (fallback depuis ${result.originalModel})` : ""}`,
         model: modelUsed,
+        fallbackUsed: result.fallbackUsed,
+        originalModel: result.originalModel,
         reply: reply.trim()
       });
     } else {
-      const errText = await response.text();
+      const errText = result.errText;
       let detail = "";
       let fullDetail = "";
       try {
@@ -169,7 +432,7 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
         ok: false,
         error: detail,
         fullError: fullDetail,
-        status: response.status
+        status: result.status
       });
     }
   } catch (err) {
@@ -279,22 +542,21 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       ...history
     ];
 
-    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
-      method: "POST",
-      headers: {
-        "Authorization": `Bearer ${settings.apiKey}`,
-        "Content-Type": "application/json",
-        ...OR_HEADERS
-      },
-      body: JSON.stringify({
-        model: settings.model || "google/gemma-4-31b-it:free",
-        max_tokens: settings.maxTokens || 800,
-        messages
-      })
+    const result = await callOpenRouterWithFallback({
+      apiKey: settings.apiKey,
+      model: settings.model || "openrouter/free",
+      messages,
+      maxTokens: settings.maxTokens || 800,
+      groqApiKey: settings.groqApiKey,
+      siliconflowApiKey: settings.siliconflowApiKey,
+      customApiUrl: settings.customApiUrl,
+      customApiKey: settings.customApiKey,
+      customApiModel: settings.customApiModel,
+      openaiApiKey: settings.openaiApiKey
     });
 
-    if (!response.ok) {
-      const errText = await response.text();
+    if (!result.ok) {
+      const errText = result.errText;
       console.error("Erreur API OpenRouter:", errText);
       let detail = "Erreur du service IA.";
       try {
@@ -304,14 +566,18 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       return res.status(502).json({ error: `Erreur IA : ${detail}. Vérifie la clé API dans /admin.` });
     }
 
-    const data = await response.json();
-    const reply = data.choices?.[0]?.message?.content || "Désolé, je n'ai pas compris.";
+    const reply = result.data.choices?.[0]?.message?.content || "Désolé, je n'ai pas compris.";
 
     // Sauvegarde de la conversation uniquement en cas de succès de l'appel
     const updatedHistory = [...history, { role: "assistant", content: reply }];
     conversations.set(sessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
 
-    res.json({ reply, sourcesUsed: relevantChunks.map((r) => r.title) });
+    res.json({
+      reply,
+      sourcesUsed: relevantChunks.map((r) => r.title),
+      fallbackUsed: result.fallbackUsed,
+      modelUsed: result.modelUsed
+    });
   } catch (err) {
     console.error(err);
     res.status(500).json({ error: "Erreur serveur" });
