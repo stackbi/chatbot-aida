@@ -1049,21 +1049,33 @@
     const statusCard = document.getElementById('model-status-card');
 
     if (!hasApiKey) {
-      dot.className = 'dot inactive';
-      badgeName.textContent = 'Pas de clé API';
-      statusIcon.className = 'status-icon warn';
-      statusIcon.textContent = '⚠';
-      statusName.textContent = 'Aucune clé API configurée';
       const fallbacks = [
         hasGroqApiKey && 'Groq',
         hasSiliconflowApiKey && 'SiliconFlow',
         hasCustomApi && 'API locale',
         hasOpenAiApiKey && 'OpenAI'
-      ].filter(Boolean).join(' → ');
-      statusDesc.textContent = 'Ajoute une clé OpenRouter pour activer l\'assistant.' +
-        (fallbacks ? ` Fallbacks dispo : ${fallbacks}` : '');
-      statusTag.textContent = 'INACTIF';
-      statusTag.className = 'status-tag';
+      ].filter(Boolean);
+      const hasAnyKey = fallbacks.length > 0;
+
+      if (hasAnyKey) {
+        dot.className = 'dot active';
+        badgeName.textContent = fallbacks[0];
+        statusIcon.className = 'status-icon ok';
+        statusIcon.textContent = '✓';
+        statusName.textContent = `Clé ${fallbacks[0]} disponible`;
+        statusDesc.textContent = `OpenRouter non configuré — fallback : ${fallbacks.join(' → ')}`;
+        statusTag.textContent = 'FALLBACK';
+        statusTag.className = 'status-tag free';
+      } else {
+        dot.className = 'dot inactive';
+        badgeName.textContent = 'Pas de clé API';
+        statusIcon.className = 'status-icon warn';
+        statusIcon.textContent = '⚠';
+        statusName.textContent = 'Aucune clé API configurée';
+        statusDesc.textContent = 'Ajoute une clé OpenRouter, Groq ou autre pour activer l\'assistant.';
+        statusTag.textContent = 'INACTIF';
+        statusTag.className = 'status-tag';
+      }
       return;
     }
 
@@ -1181,13 +1193,17 @@
       document.getElementById('set-customapimodel').value = s.customApiModel || '';
       document.getElementById('set-customapimodel').placeholder = s.customApiModel || 'llama3.1-8b';
 
+      const hasAnyKey = s.hasApiKey || s.hasGroqApiKey || s.hasOpenAiApiKey || s.hasSiliconflowApiKey || s.hasCustomApiKey;
+
       document.getElementById('set-apikey').value = '';
       document.getElementById('set-apikey').placeholder = s.hasApiKey
         ? 'Clé enregistrée (' + s.apiKey + ') — laisse vide pour ne pas changer'
         : 'sk-or-v1-...';
       document.getElementById('apikey-status').textContent = s.hasApiKey
-        ? '✓ Une clé API est configurée.'
-        : '⚠ Aucune clé API configurée — Aïda ne fonctionnera pas.';
+        ? '✓ Clé OpenRouter configurée.'
+        : hasAnyKey
+          ? 'ℹ Clé OpenRouter non configurée — fallbacks actifs'
+          : '⚠ Aucune clé API configurée — Aïda ne fonctionnera pas.';
 
       const modelSlug = s.model || 'openrouter/free';
       const modelSelect = document.getElementById('set-model');
