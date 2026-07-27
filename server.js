@@ -17,7 +17,7 @@ import { retrieveRelevantChunks, buildContextBlock } from "./lib/retrieval.js";
 import { ensureEmbeddingModel } from "./lib/embedding.js";
 
 const require = createRequire(import.meta.url);
-const pdfParse = require("pdf-parse");
+const { PDFParse } = require("pdf-parse");
 
 dotenv.config();
 
@@ -322,6 +322,16 @@ const loginLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Anti-cache pour les données admin (évite les données obsolètes dans le cache navigateur)
+app.use("/api/admin", (req, res, next) => {
+  if (req.method === "GET") {
+    res.set("Cache-Control", "no-store, no-cache, must-revalidate, private");
+    res.set("Pragma", "no-cache");
+    res.set("Expires", "0");
+  }
+  next();
+});
+
 app.post("/api/admin/login", loginLimiter, (req, res) => {
   const { password } = req.body;
   if (process.env.ADMIN_PASSWORD && password === process.env.ADMIN_PASSWORD) {
@@ -513,7 +523,12 @@ app.post("/api/admin/documents/upload", requireAdmin, async (req, res) => {
 
     const buffer = Buffer.from(base64Content, "base64");
 
-    const pdfData = await pdfParse(buffer);
+    const parser = new PDFParse({
+      data: buffer,
+      verbosity: 0 // VerbosityLevel.ERRORS
+    });
+    await parser.load();
+    const pdfData = await parser.getText();
     let text = pdfData.text || "";
 
     text = text

@@ -800,9 +800,6 @@
   `;
 
   overlay.appendChild(win);
-  document.body.appendChild(launcher);
-  document.body.appendChild(launcherTip);
-  document.body.appendChild(overlay);
 
   // ─── Références DOM ──────────────────────────────────────────────────────
   const messagesEl = win.querySelector("#aida-messages");
@@ -1003,6 +1000,13 @@
     );
   }
 
+  // ─── Montage différé : attend la config pour éviter le flash couleur ────
+  function mountWidget() {
+    document.body.appendChild(launcher);
+    document.body.appendChild(launcherTip);
+    document.body.appendChild(overlay);
+  }
+
   // ─── Chargement de la config (nom, message d'accueil, couleurs, police) ──
   fetch(BACKEND_ORIGIN + "/api/widget-config")
     .then((r) => r.json())
@@ -1032,8 +1036,9 @@
           `"${fontName}", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`
         );
       }
+      mountWidget();
     })
-    .catch(() => {});
+    .catch(() => { mountWidget(); });
 
   // ─── Ouverture / Fermeture ────────────────────────────────────────────────
   function openChat() {
@@ -1134,7 +1139,7 @@
     }
   }, { passive: true });
 
-  const scrollIndicator = document.getElementById("aida-scroll-bottom");
+  const scrollIndicator = win.querySelector("#aida-scroll-bottom");
   if (scrollIndicator) {
     scrollIndicator.addEventListener("click", scrollToBottom);
     // Support clavier (Entrée / Espace)
