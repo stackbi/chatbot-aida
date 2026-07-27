@@ -13,6 +13,7 @@ import {
   deleteDocument
 } from "./lib/store.js";
 import { retrieveRelevantChunks, buildContextBlock } from "./lib/retrieval.js";
+import { ensureEmbeddingModel } from "./lib/embedding.js";
 
 const require = createRequire(import.meta.url);
 const pdfParse = require("pdf-parse");
@@ -80,7 +81,7 @@ async function apiCall({ baseUrl, apiKey, model, messages, maxTokens, extraHeade
 
 /**
  * Appelle l'API OpenRouter avec fallback automatique et exponential backoff.
- * Chaîne de fallback 100% gratuite :
+ * Chaîne de fallback (priorité décroissante) :
  *   1. Modèle configuré (via OpenRouter, défaut: openrouter/free)
  *   2. openrouter/free (fallback auto OpenRouter)
  *   3. Groq (free tier très généreux, si clé dispo)
@@ -242,7 +243,7 @@ async function callOpenRouterWithFallback({ apiKey, model, messages, maxTokens, 
     console.warn("Rate limit API personnalisée, passage au fallback suivant");
   }
 
-  // ── Phase 4 : fallback OpenAI ──
+  // ── Phase 5 : fallback OpenAI (payant, ultime recours) ──
   if (openaiApiKey) {
     attemptCount++;
     const delayMs = Math.min(500 * Math.pow(2, attemptCount - 1), 8000);
@@ -370,7 +371,7 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
 
     // Utilise la clé fournie ou celle enregistrée
     const testKey = apiKey || getSettings().apiKey;
-    const testModel = model || getSettings().model || "google/gemma-4-31b-it:free";
+    const testModel = model || getSettings().model || "openrouter/free";
 
     if (!testKey) {
       return res.json({ ok: false, error: "Aucune clé API fournie." });
@@ -455,13 +456,18 @@ app.get("/api/admin/documents", requireAdmin, (req, res) => {
   res.json({ documents: docs });
 });
 
-app.post("/api/admin/documents", requireAdmin, (req, res) => {
-  const { title, content } = req.body;
-  if (!content || !content.trim()) {
-    return res.status(400).json({ error: "Le contenu du document est requis" });
+app.post("/api/admin/documents", requireAdmin, async (req, res) => {
+  try {
+    const { title, content } = req.body;
+    if (!content || !content.trim()) {
+      return res.status(400).json({ error: "Le contenu du document est requis" });
+    }
+    const doc = await addDocument({ title, content });
+    res.json({ ok: true, document: { id: doc.id, title: doc.title, addedAt: doc.addedAt } });
+  } catch (err) {
+    console.error("Erreur ajout document:", err);
+    res.status(500).json({ error: "Erreur lors de l'ajout du document" });
   }
-  const doc = addDocument({ title, content });
-  res.json({ ok: true, document: { id: doc.id, title: doc.title, addedAt: doc.addedAt } });
 });
 
 app.post("/api/admin/documents/upload", requireAdmin, async (req, res) => {
@@ -491,7 +497,7 @@ app.post("/api/admin/documents/upload", requireAdmin, async (req, res) => {
       });
     }
 
-    const doc = addDocument({ title: filename, content: text });
+    const doc = await addDocument({ title: filename, content: text });
 
     res.json({ ok: true, document: { id: doc.id, title: doc.title, addedAt: doc.addedAt } });
   } catch (err) {
@@ -526,9 +532,9 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       });
     }
 
-    // 1. Récupération du contexte pertinent (RAG)
+    // 1. Récupération du contexte pertinent (RAG vectoriel + mots-clés)
     const documents = getDocuments();
-    const relevantChunks = retrieveRelevantChunks(documents, message, 4);
+    const relevantChunks = await retrieveRelevantChunks(documents, message, 4);
     const contextBlock = buildContextBlock(relevantChunks);
 
     // 2. Historique de conversation (copie pour éviter la corruption en cas d'échec)
@@ -557,13 +563,22 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
 
     if (!result.ok) {
       const errText = result.errText;
-      console.error("Erreur API OpenRouter:", errText);
+      console.error("Erreur API IA:", errText);
       let detail = "Erreur du service IA.";
       try {
         const errJson = JSON.parse(errText);
         detail = errJson.error?.message || errJson.error || detail;
       } catch {}
-      return res.status(502).json({ error: `Erreur IA : ${detail}. Vérifie la clé API dans /admin.` });
+
+      let userMessage;
+      if (result.status === 429) {
+        userMessage = `Erreur IA : tous les fournisseurs sont saturés (429). Réessaie dans quelques instants ou configure une clé de fallback.`;
+      } else if (result.status === 401 || result.status === 403) {
+        userMessage = `Erreur IA : la clé API OpenRouter est invalide ou a expiré. Vérifie-la dans /admin.`;
+      } else {
+        userMessage = `Erreur IA : ${detail}${result.status >= 500 ? ' (le fournisseur est peut-être temporairement indisponible)' : ''}`;
+      }
+      return res.status(502).json({ error: userMessage });
     }
 
     const reply = result.data.choices?.[0]?.message?.content || "Désolé, je n'ai pas compris.";
@@ -681,6 +696,21 @@ function shutdown(signal) {
 
 process.on("SIGINT", () => shutdown("SIGINT"));
 process.on("SIGTERM", () => shutdown("SIGTERM"));
+
+// ─── Préchargement lazy du modèle d'embedding ────────────────────────
+// Le modèle est chargé en arrière-plan après le démarrage du serveur.
+// Si le chargement échoue (pas d'internet, modèle non trouvé), le RAG
+// continuera de fonctionner en mode mots-clés.
+setTimeout(async () => {
+  try {
+    console.log("🔄 Préchargement du modèle d'embedding…");
+    await ensureEmbeddingModel();
+    console.log("✅ Modèle d'embedding disponible");
+  } catch (err) {
+    console.warn("⚠️ Préchargement du modèle d'embedding échoué:", err.message);
+    console.warn("   Le RAG utilisera la recherche par mots-clés jusqu'au rechargement.");
+  }
+}, 0); // Céde la boucle d'événements au démarrage du serveur
 
 const PORT = process.env.PORT || 3000;
 const server = app.listen(PORT, () => {
