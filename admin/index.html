@@ -984,10 +984,14 @@
     document.getElementById('login-error').textContent = error || '';
   }
 
-  function showDashboard() {
+  async function showDashboard() {
     loginScreen.style.display = 'none';
     dashboard.style.display = 'block';
-    loadSettings();
+    const ok = await loadSettings();
+    if (!ok) {
+      document.getElementById('save-settings-btn').disabled = true;
+      document.getElementById('save-settings-status').textContent = '⚠ Échec du chargement — actualise la page';
+    }
     loadDocuments();
   }
 
@@ -1122,11 +1126,23 @@
     container.style.display = e.target.value === 'custom' ? 'block' : 'none';
   });
 
+  // Drapeau : les réglages ont été chargés avec succès (empêche la sauvegarde
+  // de valeurs par défaut si le chargement échoue silencieusement)
+  let settingsLoaded = false;
+
   // --- Paramètres ---
   async function loadSettings() {
     try {
       const res = await apiFetch('/api/admin/settings');
       const s = await res.json();
+
+      // Valide que la réponse a la forme attendue avant de toucher au formulaire
+      if (typeof s !== 'object' || typeof s.model !== 'string' || typeof s.hasApiKey !== 'boolean') {
+        console.warn('loadSettings: réponse invalide', s);
+        settingsLoaded = false;
+        return false;
+      }
+
       // Groq key
       document.getElementById('set-groq-apikey').value = '';
       document.getElementById('set-groq-apikey').placeholder = s.hasGroqApiKey
@@ -1178,8 +1194,6 @@
       const customModelInput = document.getElementById('set-custommodel');
       const customModelContainer = document.getElementById('custom-model-container');
 
-      // Met à jour les indicateurs visuels (badge top-bar + carte statut)
-      // fallbackUsed est un état runtime, pas une valeur persistée
       updateModelIndicators(modelSlug, s.hasApiKey, false, null, s.hasOpenAiApiKey, s.hasGroqApiKey, s.hasSiliconflowApiKey, !!s.customApiUrl);
 
       if (!KNOWN_MODELS[modelSlug]) {
@@ -1213,8 +1227,13 @@
         customFontInput.value = '';
         customFontContainer.style.display = 'none';
       }
+
+      settingsLoaded = true;
+      return true;
     } catch (e) {
-      console.error(e);
+      console.error('loadSettings: échec', e);
+      settingsLoaded = false;
+      return false;
     }
   }
 
@@ -1313,43 +1332,46 @@
   });
 
   document.getElementById('save-settings-btn').addEventListener('click', async () => {
-    let selectedFont = document.getElementById('set-fontfamily').value;
-    if (selectedFont === 'custom') {
-      selectedFont = document.getElementById('set-customfont').value.trim() || 'system-ui';
+    if (!settingsLoaded) {
+      document.getElementById('save-settings-status').textContent = '⚠ Recharge la page avant d\'enregistrer';
+      return;
     }
-
-    let selectedModel = document.getElementById('set-model').value;
-    if (selectedModel === 'custom') {
-      selectedModel = document.getElementById('set-custommodel').value.trim() || 'google/gemma-4-31b-it:free';
-    }
-
-    const payload = {
-      apiKey: document.getElementById('set-apikey').value,
-      openaiApiKey: document.getElementById('set-openai-apikey').value,
-      groqApiKey: document.getElementById('set-groq-apikey').value,
-      siliconflowApiKey: document.getElementById('set-siliconflow-apikey').value,
-      customApiUrl: document.getElementById('set-customapiurl').value,
-      customApiKey: document.getElementById('set-customapikey').value,
-      customApiModel: document.getElementById('set-customapimodel').value,
-      model: selectedModel,
-      maxTokens: parseInt(document.getElementById('set-maxtokens').value, 10) || 800,
-      botName: document.getElementById('set-botname').value,
-      welcomeMessage: document.getElementById('set-welcome').value,
-      systemPrompt: document.getElementById('set-systemprompt').value,
-      accentColor: document.getElementById('set-accentcolor').value,
-      accentColorDark: document.getElementById('set-accentcolordark').value,
-      fontFamily: selectedFont
-    };
     const status = document.getElementById('save-settings-status');
     status.textContent = 'Enregistrement...';
     try {
+      let selectedFont = document.getElementById('set-fontfamily').value;
+      if (selectedFont === 'custom') {
+        selectedFont = document.getElementById('set-customfont').value.trim() || 'system-ui';
+      }
+      let selectedModel = document.getElementById('set-model').value;
+      if (selectedModel === 'custom') {
+        selectedModel = document.getElementById('set-custommodel').value.trim() || 'google/gemma-4-31b-it:free';
+      }
+      const payload = {
+        apiKey: document.getElementById('set-apikey').value,
+        openaiApiKey: document.getElementById('set-openai-apikey').value,
+        groqApiKey: document.getElementById('set-groq-apikey').value,
+        siliconflowApiKey: document.getElementById('set-siliconflow-apikey').value,
+        customApiUrl: document.getElementById('set-customapiurl').value,
+        customApiKey: document.getElementById('set-customapikey').value,
+        customApiModel: document.getElementById('set-customapimodel').value,
+        model: selectedModel,
+        maxTokens: parseInt(document.getElementById('set-maxtokens').value, 10) || 800,
+        botName: document.getElementById('set-botname').value,
+        welcomeMessage: document.getElementById('set-welcome').value,
+        systemPrompt: document.getElementById('set-systemprompt').value,
+        accentColor: document.getElementById('set-accentcolor').value,
+        accentColorDark: document.getElementById('set-accentcolordark').value,
+        fontFamily: selectedFont
+      };
       const res = await apiFetch('/api/admin/settings', {
         method: 'POST',
         body: JSON.stringify(payload)
       });
       if (res.ok) {
         status.textContent = '✓ Enregistré';
-        loadSettings();
+        await loadSettings();
+        document.getElementById('save-settings-btn').disabled = false;
         setTimeout(() => (status.textContent = ''), 2500);
       } else {
         status.textContent = 'Erreur lors de l\'enregistrement';
