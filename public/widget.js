@@ -831,6 +831,8 @@
   let welcomeShown = false;
   let suggestions = [];
   let suggestionsLoaded = false;
+  let welcomeMessage = "";
+  let botName = "Aïda";
 
   // ─── Suggestions ─────────────────────────────────────────────────────────
   const suggestionsPromise = fetch(BACKEND_ORIGIN + "/api/widget-suggestions")
@@ -966,9 +968,9 @@
     const invite = document.createElement("div");
     invite.id = "aida-invite";
     invite.innerHTML = `
-      <div id="aida-invite-avatar">A</div>
+      <div id="aida-invite-avatar">${botName.charAt(0).toUpperCase()}</div>
       <h3>Bienvenue 👋</h3>
-      <p>Comment puis-je vous aider ? Posez votre question ou découvrez ce que je peux faire pour vous.</p>
+      <p>${welcomeMessage || "Comment puis-je vous aider ? Posez votre question ou découvrez ce que je peux faire pour vous."}</p>
       <div id="aida-invite-actions">
         <button id="aida-invite-primary">💬 Poser une question</button>
         <button id="aida-invite-secondary">✨ Découvrir</button>
@@ -996,17 +998,19 @@
     welcomeShown = true;
     hasShownInvite = true;
     addMessage(
-      "Ravie de vous rencontrer ! Je suis Aïda, votre assistante dédiée. Je peux vous renseigner sur nos services, vous orienter vers les bonnes ressources, ou répondre à toutes vos questions. Que souhaitez-vous explorer ?",
+      welcomeMessage || `Ravie de vous rencontrer ! Je suis ${botName}, votre assistante dédiée. Je peux vous renseigner sur nos services, vous orienter vers les bonnes ressources, ou répondre à toutes vos questions. Que souhaitez-vous explorer ?`,
       "bot"
     );
   }
 
-  // ─── Chargement de la config ──────────────────────────────────────────────
+  // ─── Chargement de la config (nom, message d'accueil, couleurs, police) ──
   fetch(BACKEND_ORIGIN + "/api/widget-config")
     .then((r) => r.json())
     .then((cfg) => {
-      botNameEl.textContent = cfg.botName || "Aïda";
-      avatarEl.textContent = (cfg.botName || "Aïda").charAt(0).toUpperCase();
+      botName = cfg.botName || "Aïda";
+      welcomeMessage = cfg.welcomeMessage || "";
+      botNameEl.textContent = botName;
+      avatarEl.textContent = botName.charAt(0).toUpperCase();
       if (cfg.accentColor) document.documentElement.style.setProperty("--aida-accent", cfg.accentColor);
       if (cfg.accentColorDark) document.documentElement.style.setProperty("--aida-accent-dark", cfg.accentColorDark);
       if (cfg.fontFamily && cfg.fontFamily !== "system-ui" && cfg.fontFamily !== "inherit") {

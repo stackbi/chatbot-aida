@@ -244,7 +244,11 @@ app.delete("/api/admin/documents/:id", requireAdmin, (req, res) => {
 
 // ---------------------------------------------------------------------------
 // Route publique : chat (utilisée par le widget) avec rate limiter
+// Gère explicitement le preflight CORS OPTIONS — indispensable quand le widget
+// est chargé depuis un domaine différent (le site du client). Sans ce handler,
+// le navigateur bloque les requêtes POST avec Content-Type: application/json.
 // ---------------------------------------------------------------------------
+app.options("/api/chat", widgetCors);
 app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
   try {
     const { message, sessionId } = req.body;
@@ -395,8 +399,25 @@ function generateSuggestions(documents) {
   return all.slice(0, 6);
 }
 
+// ─── Arrêt gracieux (graceful shutdown) ─────────────────────────────────
+function shutdown(signal) {
+  console.log(`\n${signal} reçu. Arrêt du serveur...`);
+  server.close(() => {
+    console.log("Serveur arrêté.");
+    process.exit(0);
+  });
+  // Force l'arrêt après 5s si les connexions ne se ferment pas
+  setTimeout(() => {
+    console.error("Arrêt forcé après timeout.");
+    process.exit(1);
+  }, 5000);
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Serveur démarré sur http://localhost:${PORT}`);
   console.log(`Tableau de bord admin : http://localhost:${PORT}/admin`);
 });

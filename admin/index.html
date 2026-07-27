@@ -172,6 +172,37 @@
   }
   .top-bar a:hover { color: var(--accent-dark); }
 
+  .top-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .logout-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 14px;
+    border: 1.5px solid var(--surface-border);
+    border-radius: var(--radius-full);
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+  .logout-btn:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: var(--danger-bg);
+  }
+  .logout-btn:active {
+    transform: scale(0.96);
+  }
+
   /* Layout */
   .dashboard-body {
     max-width: 820px;
@@ -657,9 +688,12 @@
       <div class="top-bar-brand">A</div>
       <h1>Aïda <span>· Tableau de bord</span></h1>
     </div>
-    <div class="model-badge" id="model-indicator" title="Modèle IA actif">
-      <span class="dot inactive" id="model-dot"></span>
-      <span class="model-name" id="model-name-display">Modèle…</span>
+    <div class="top-bar-right">
+      <button class="logout-btn" id="logout-btn" title="Se déconnecter">🚪 Déconnexion</button>
+      <div class="model-badge" id="model-indicator" title="Modèle IA actif">
+        <span class="dot inactive" id="model-dot"></span>
+        <span class="model-name" id="model-name-display">Modèle…</span>
+      </div>
     </div>
   </div>
 
@@ -1341,6 +1375,17 @@
       uploadBtn.removeAttribute('disabled');
     };
     reader.readAsDataURL(selectedPdfFile);
+  });
+
+  // --- Déconnexion ---
+  function logout() {
+    sessionStorage.removeItem('adminPassword');
+    adminPassword = '';
+    showLogin('Vous êtes déconnecté.');
+  }
+
+  document.getElementById('logout-btn').addEventListener('click', () => {
+    logout();
   });
 
   // --- Démarrage ---
