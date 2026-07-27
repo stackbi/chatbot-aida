@@ -4,6 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Tableau de bord — Aïda</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg" />
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
 <link href="https://fonts.googleapis.com/css2?family=Outfit:wght@300;400;500;600;700;800&display=swap" rel="stylesheet">
@@ -170,6 +171,37 @@
     display: flex; align-items: center; gap: 4px;
   }
   .top-bar a:hover { color: var(--accent-dark); }
+
+  .top-bar-right {
+    display: flex;
+    align-items: center;
+    gap: 12px;
+  }
+
+  .logout-btn {
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+    padding: 6px 14px;
+    border: 1.5px solid var(--surface-border);
+    border-radius: var(--radius-full);
+    background: var(--surface);
+    color: var(--text-secondary);
+    font-size: 0.78rem;
+    font-weight: 600;
+    cursor: pointer;
+    font-family: inherit;
+    transition: all 0.2s ease;
+    white-space: nowrap;
+  }
+  .logout-btn:hover {
+    border-color: var(--danger);
+    color: var(--danger);
+    background: var(--danger-bg);
+  }
+  .logout-btn:active {
+    transform: scale(0.96);
+  }
 
   /* Layout */
   .dashboard-body {
@@ -454,6 +486,177 @@
     #login-box { padding: 24px 18px; width: 92%; }
   }
 
+  /* ── Test de connexion ── */
+  .test-result {
+    margin-top: 14px;
+    padding: 10px 14px;
+    border-radius: var(--radius-sm);
+    font-size: 0.82rem;
+    display: none;
+    align-items: flex-start;
+    gap: 8px;
+    line-height: 1.5;
+    animation: test-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  @keyframes test-in {
+    from { opacity: 0; transform: translateY(-4px); }
+    to { opacity: 1; transform: translateY(0); }
+  }
+  .test-result.show { display: flex; }
+  .test-result.success {
+    background: var(--success-bg);
+    border: 1px solid rgba(16, 185, 129, 0.2);
+    color: #065f46;
+  }
+  .test-result.error {
+    background: var(--danger-bg);
+    border: 1px solid var(--danger-border);
+    color: #991b1b;
+  }
+  .test-result .test-icon { font-size: 1rem; flex-shrink: 0; }
+  .test-result .test-msg { flex: 1; min-width: 0; }
+  .test-result .test-msg strong { font-weight: 600; }
+  .test-result .test-err-detail {
+    font-size: 0.75rem;
+    opacity: 0.75;
+    margin-top: 2px;
+    word-break: break-word;
+  }
+
+  .btn-test {
+    padding: 8px 16px;
+    border: 1.5px solid var(--surface-border);
+    border-radius: var(--radius-sm);
+    font-weight: 600;
+    font-size: 0.82rem;
+    cursor: pointer;
+    font-family: inherit;
+    background: var(--surface);
+    color: var(--text-secondary);
+    transition: all 0.2s ease;
+    display: inline-flex;
+    align-items: center;
+    gap: 5px;
+  }
+  .btn-test:hover:not(:disabled) {
+    border-color: var(--accent);
+    color: var(--accent);
+    background: var(--accent-soft);
+  }
+  .btn-test:disabled {
+    opacity: 0.5;
+    cursor: default;
+  }
+  .btn-test .spinner {
+    display: none;
+    width: 14px; height: 14px;
+    border: 2px solid var(--accent-soft);
+    border-top-color: var(--accent);
+    border-radius: 50%;
+    animation: test-spin 0.6s linear infinite;
+  }
+  .btn-test.loading .spinner { display: inline-block; }
+  .btn-test.loading .btn-label { display: none; }
+  @keyframes test-spin {
+    to { transform: rotate(360deg); }
+  }
+
+  /* ── Indicateur de modèle actif ── */
+  .model-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    padding: 4px 12px 4px 8px;
+    background: var(--accent-soft);
+    border: 1px solid rgba(108, 99, 255, 0.12);
+    border-radius: var(--radius-full);
+    font-size: 0.72rem;
+    font-weight: 600;
+    color: var(--accent-dark);
+    white-space: nowrap;
+    max-width: 220px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    transition: all 0.3s ease;
+  }
+  .model-badge .dot {
+    width: 7px; height: 7px;
+    border-radius: 50%;
+    flex-shrink: 0;
+    transition: background 0.3s ease;
+  }
+  .model-badge .dot.active { background: var(--success); box-shadow: 0 0 6px rgba(16, 185, 129, 0.4); }
+  .model-badge .dot.inactive { background: var(--text-muted); }
+  .model-badge .dot.error { background: var(--danger); box-shadow: 0 0 6px rgba(239, 68, 68, 0.4); }
+  .model-badge .model-name {
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+
+  .model-status-card {
+    margin-top: 14px;
+    padding: 12px 14px;
+    border-radius: var(--radius-sm);
+    background: var(--surface-hover);
+    border: 1px solid var(--surface-border-light);
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 12px;
+    transition: all 0.3s ease;
+  }
+  .model-status-card .status-left {
+    display: flex;
+    align-items: center;
+    gap: 10px;
+    min-width: 0;
+    flex: 1;
+  }
+  .model-status-card .status-icon {
+    width: 28px; height: 28px;
+    border-radius: 50%;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    font-size: 0.75rem;
+    flex-shrink: 0;
+  }
+  .model-status-card .status-icon.ok { background: var(--success-bg); }
+  .model-status-card .status-icon.warn { background: #fffbeb; }
+  .model-status-card .status-info { min-width: 0; flex: 1; }
+  .model-status-card .status-label {
+    font-size: 0.78rem;
+    font-weight: 600;
+    color: var(--text-primary);
+    white-space: nowrap;
+    overflow: hidden;
+    text-overflow: ellipsis;
+  }
+  .model-status-card .status-sub {
+    font-size: 0.7rem;
+    color: var(--text-muted);
+    margin-top: 1px;
+  }
+  .model-status-card .status-tag {
+    font-size: 0.64rem;
+    font-weight: 600;
+    padding: 2px 8px;
+    border-radius: var(--radius-full);
+    background: var(--accent-soft);
+    color: var(--accent-dark);
+    text-transform: uppercase;
+    letter-spacing: 0.03em;
+    flex-shrink: 0;
+  }
+  .model-status-card .status-tag.free {
+    background: var(--success-bg);
+    color: var(--success);
+  }
+  .model-status-card .status-tag.auto {
+    background: #e8f4fd;
+    color: #0066aa;
+  }
+
   /* Reduced motion */
   @media (prefers-reduced-motion: reduce) {
     #login-box { animation: none; }
@@ -485,7 +688,13 @@
       <div class="top-bar-brand">A</div>
       <h1>Aïda <span>· Tableau de bord</span></h1>
     </div>
-
+    <div class="top-bar-right">
+      <button class="logout-btn" id="logout-btn" title="Se déconnecter">🚪 Déconnexion</button>
+      <div class="model-badge" id="model-indicator" title="Modèle IA actif">
+        <span class="dot inactive" id="model-dot"></span>
+        <span class="model-name" id="model-name-display">Modèle…</span>
+      </div>
+    </div>
   </div>
 
   <div class="dashboard-body">
@@ -508,18 +717,61 @@
         </div>
         <div class="form-grid">
           <div class="form-group">
-            <label for="set-apikey">Clé API Anthropic</label>
-            <input id="set-apikey" type="password" placeholder="sk-ant-..." />
+            <label for="set-apikey">Clé API OpenRouter</label>
+            <input id="set-apikey" type="password" placeholder="sk-or-v1-..." />
             <div class="field-hint" id="apikey-status"></div>
           </div>
           <div class="form-group">
             <label for="set-model">Modèle IA</label>
-            <input id="set-model" type="text" placeholder="claude-3-5-sonnet-20241022" />
+            <select id="set-model">
+              <option value="google/gemma-4-31b-it:free">⭐ Gemma 4 31B (free)</option>
+              <option value="google/gemma-2-9b-it:free">Gemma 2 9B (free)</option>
+              <option value="mistralai/mistral-7b-instruct:free">Mistral 7B (free)</option>
+              <option value="meta-llama/llama-3.1-8b:free">Llama 3.1 8B (free)</option>
+              <option value="deepseek/deepseek-r1-distill-qwen-7b:free">DeepSeek R1 7B (free)</option>
+              <option value="qwen/qwen-2.5-7b-instruct:free">Qwen 2.5 7B (free)</option>
+              <option value="openrouter/free">🔄 Auto : meilleur modèle gratuit dispo</option>
+              <option value="custom">✏️ Autre modèle (saisie libre)</option>
+            </select>
+            <div class="field-hint" id="model-hint">Choisis un modèle ou sélectionne "Autre" pour saisir un slug personnalisé.</div>
+          </div>
+
+          <!-- Indicateur visuel du modèle actif -->
+          <div class="model-status-card" id="model-status-card">
+            <div class="status-left">
+              <div class="status-icon ok" id="model-status-icon">✓</div>
+              <div class="status-info">
+                <div class="status-label" id="model-status-name">Modèle actif</div>
+                <div class="status-sub" id="model-status-desc">En attente de configuration…</div>
+              </div>
+            </div>
+            <span class="status-tag" id="model-status-tag">—</span>
+          </div>
+
+          <div id="custom-model-container" style="display: none;">
+            <div class="form-group">
+              <label for="set-custommodel">Slug du modèle (OpenRouter)</label>
+              <input id="set-custommodel" type="text" placeholder="google/gemma-4-31b-it:free" />
+              <div class="field-hint">Ex: google/gemma-4-31b-it:free, anthropic/claude-3-haiku, etc.</div>
+            </div>
           </div>
           <div class="form-group">
             <label for="set-maxtokens">Longueur max. de réponse</label>
-            <input id="set-maxtokens" type="number" min="100" max="4000" placeholder="500" />
+            <input id="set-maxtokens" type="number" min="100" max="4000" placeholder="800" />
             <div class="field-hint">Nombre maximum de tokens par réponse (100-4000).</div>
+          </div>
+          <div class="form-group">
+            <button class="btn-test" id="test-connection-btn">
+              <span class="spinner"></span>
+              <span class="btn-label">🔌 Tester la connexion</span>
+            </button>
+          </div>
+          <div class="test-result" id="test-result">
+            <span class="test-icon" id="test-icon"></span>
+            <div class="test-msg">
+              <strong id="test-title"></strong>
+              <div class="test-err-detail" id="test-detail"></div>
+            </div>
           </div>
         </div>
       </div>
@@ -735,6 +987,69 @@
     container.style.display = e.target.value === 'custom' ? 'block' : 'none';
   });
 
+  // ─── Modèles connus avec leurs libellés d'affichage ────────────
+  const KNOWN_MODELS = {
+    'google/gemma-4-31b-it:free':      { label: 'Gemma 4 31B',      tag: 'free',   emoji: '⭐' },
+    'google/gemma-2-9b-it:free':       { label: 'Gemma 2 9B',       tag: 'free',   emoji: '🧠' },
+    'mistralai/mistral-7b-instruct:free': { label: 'Mistral 7B',    tag: 'free',   emoji: '🌬️' },
+    'meta-llama/llama-3.1-8b:free':    { label: 'Llama 3.1 8B',     tag: 'free',   emoji: '🦙' },
+    'deepseek/deepseek-r1-distill-qwen-7b:free': { label: 'DeepSeek R1 7B', tag: 'free', emoji: '🔍' },
+    'qwen/qwen-2.5-7b-instruct:free':  { label: 'Qwen 2.5 7B',      tag: 'free',   emoji: '✨' },
+    'openrouter/free':                  { label: 'Auto (meilleur gratuit)', tag: 'auto', emoji: '🔄' }
+  };
+
+  function updateModelIndicators(modelSlug, hasApiKey) {
+    const dot = document.getElementById('model-dot');
+    const badgeName = document.getElementById('model-name-display');
+    const statusIcon = document.getElementById('model-status-icon');
+    const statusName = document.getElementById('model-status-name');
+    const statusDesc = document.getElementById('model-status-desc');
+    const statusTag = document.getElementById('model-status-tag');
+
+    if (!hasApiKey) {
+      // Pas de clé → indicateur inactif
+      dot.className = 'dot inactive';
+      badgeName.textContent = 'Pas de clé API';
+      statusIcon.className = 'status-icon warn';
+      statusIcon.textContent = '⚠';
+      statusName.textContent = 'Aucune clé API configurée';
+      statusDesc.textContent = 'Ajoute une clé OpenRouter pour activer l\'assistant';
+      statusTag.textContent = 'INACTIF';
+      statusTag.className = 'status-tag';
+      return;
+    }
+
+    if (!modelSlug) {
+      dot.className = 'dot inactive';
+      badgeName.textContent = 'Modèle…';
+      statusIcon.className = 'status-icon warn';
+      statusIcon.textContent = '⚠';
+      statusName.textContent = 'Aucun modèle sélectionné';
+      statusDesc.textContent = 'Choisis un modèle dans la liste ci-dessus';
+      statusTag.textContent = '—';
+      statusTag.className = 'status-tag';
+      return;
+    }
+
+    const known = KNOWN_MODELS[modelSlug];
+    const displayName = known ? `${known.emoji} ${known.label}` : `✏️ ${modelSlug}`;
+    const tagText = known ? known.tag.toUpperCase() : 'CUSTOM';
+
+    dot.className = 'dot active';
+    badgeName.textContent = modelSlug;
+    statusIcon.className = 'status-icon ok';
+    statusIcon.textContent = '✓';
+    statusName.textContent = displayName;
+    statusDesc.textContent = `Slug : ${modelSlug}`;
+    statusTag.textContent = tagText;
+    statusTag.className = 'status-tag' + (known?.tag === 'free' ? ' free' : known?.tag === 'auto' ? ' auto' : '');
+  }
+
+  document.getElementById('set-model').addEventListener('change', (e) => {
+    const container = document.getElementById('custom-model-container');
+    container.style.display = e.target.value === 'custom' ? 'block' : 'none';
+  });
+
   // --- Paramètres ---
   async function loadSettings() {
     try {
@@ -743,12 +1058,29 @@
       document.getElementById('set-apikey').value = '';
       document.getElementById('set-apikey').placeholder = s.hasApiKey
         ? 'Clé enregistrée (' + s.apiKey + ') — laisse vide pour ne pas changer'
-        : 'sk-ant-...';
+        : 'sk-or-v1-...';
       document.getElementById('apikey-status').textContent = s.hasApiKey
         ? '✓ Une clé API est configurée.'
         : '⚠ Aucune clé API configurée — Aïda ne fonctionnera pas.';
-      document.getElementById('set-model').value = s.model || '';
-      document.getElementById('set-maxtokens').value = s.maxTokens || 500;
+
+      const modelSlug = s.model || 'google/gemma-4-31b-it:free';
+      const modelSelect = document.getElementById('set-model');
+      const customModelInput = document.getElementById('set-custommodel');
+      const customModelContainer = document.getElementById('custom-model-container');
+
+      // Met à jour les indicateurs visuels (badge top-bar + carte statut)
+      updateModelIndicators(modelSlug, s.hasApiKey);
+
+      if (!KNOWN_MODELS[modelSlug]) {
+        modelSelect.value = 'custom';
+        customModelInput.value = modelSlug;
+        customModelContainer.style.display = 'block';
+      } else {
+        modelSelect.value = modelSlug;
+        customModelInput.value = '';
+        customModelContainer.style.display = 'none';
+      }
+      document.getElementById('set-maxtokens').value = s.maxTokens || 800;
       document.getElementById('set-botname').value = s.botName || '';
       document.getElementById('set-welcome').value = s.welcomeMessage || '';
       document.getElementById('set-systemprompt').value = s.systemPrompt || '';
@@ -775,16 +1107,86 @@
     }
   }
 
+  // --- Test de connexion API ---
+  document.getElementById('test-connection-btn').addEventListener('click', async (e) => {
+    const btn = e.currentTarget;
+    const resultBox = document.getElementById('test-result');
+    const icon = document.getElementById('test-icon');
+    const title = document.getElementById('test-title');
+    const detail = document.getElementById('test-detail');
+
+    // Récupère la clé (nouvelle saisie ou déjà enregistrée)
+    const apiKey = document.getElementById('set-apikey').value;
+
+    let selectedModel = document.getElementById('set-model').value;
+    if (selectedModel === 'custom') {
+      selectedModel = document.getElementById('set-custommodel').value.trim() || 'google/gemma-4-31b-it:free';
+    }
+
+    btn.classList.add('loading');
+    btn.disabled = true;
+    resultBox.className = 'test-result show';
+    icon.textContent = '⏳';
+    title.textContent = 'Test en cours…';
+    detail.textContent = '';
+
+    try {
+      const res = await apiFetch('/api/admin/test-connection', {
+        method: 'POST',
+        body: JSON.stringify({ apiKey, model: selectedModel })
+      });
+      const data = await res.json();
+
+      if (data.ok) {
+        resultBox.className = 'test-result show success';
+        icon.textContent = '✓';
+        title.textContent = data.message || 'Connexion réussie !';
+        detail.textContent = data.reply ? `Réponse : "${data.reply}"` : '';
+      } else {
+        resultBox.className = 'test-result show error';
+        icon.textContent = '✗';
+
+        if (data.status === 429) {
+          title.textContent = '⚠ Trop de requêtes (429)';
+          const extra = data.fullError && data.fullError !== data.error ? ` — ${data.fullError}` : '';
+          detail.textContent = 'Limite de taux atteinte.' + extra + ' Attends 1 minute ou utilise un autre modèle (openrouter/free).';
+        } else if (data.status === 402 || data.status === 403) {
+          title.textContent = `Erreur d\'authentification (${data.status})`;
+          detail.textContent = 'Ta clé API semble invalide ou a expiré. Vérifie-la sur openrouter.ai/keys.';
+        } else if (data.status === 502 || data.status === 503) {
+          title.textContent = `Service indisponible (${data.status})`;
+          detail.textContent = 'Le fournisseur du modèle est temporairement indisponible. Réessaie dans quelques instants.';
+        } else {
+          title.textContent = `Erreur (${data.status || '?'})`;
+          detail.textContent = data.fullError || data.error || 'Réponse inconnue';
+        }
+      }
+    } catch (err) {
+      resultBox.className = 'test-result show error';
+      icon.textContent = '⚠';
+      title.textContent = 'Erreur réseau';
+      detail.textContent = 'Impossible de joindre le serveur. Vérifie que le serveur est lancé.';
+    } finally {
+      btn.classList.remove('loading');
+      btn.disabled = false;
+    }
+  });
+
   document.getElementById('save-settings-btn').addEventListener('click', async () => {
     let selectedFont = document.getElementById('set-fontfamily').value;
     if (selectedFont === 'custom') {
       selectedFont = document.getElementById('set-customfont').value.trim() || 'system-ui';
     }
 
+    let selectedModel = document.getElementById('set-model').value;
+    if (selectedModel === 'custom') {
+      selectedModel = document.getElementById('set-custommodel').value.trim() || 'google/gemma-4-31b-it:free';
+    }
+
     const payload = {
       apiKey: document.getElementById('set-apikey').value,
-      model: document.getElementById('set-model').value,
-      maxTokens: parseInt(document.getElementById('set-maxtokens').value, 10) || 500,
+      model: selectedModel,
+      maxTokens: parseInt(document.getElementById('set-maxtokens').value, 10) || 800,
       botName: document.getElementById('set-botname').value,
       welcomeMessage: document.getElementById('set-welcome').value,
       systemPrompt: document.getElementById('set-systemprompt').value,
@@ -973,6 +1375,17 @@
       uploadBtn.removeAttribute('disabled');
     };
     reader.readAsDataURL(selectedPdfFile);
+  });
+
+  // --- Déconnexion ---
+  function logout() {
+    sessionStorage.removeItem('adminPassword');
+    adminPassword = '';
+    showLogin('Vous êtes déconnecté.');
+  }
+
+  document.getElementById('logout-btn').addEventListener('click', () => {
+    logout();
   });
 
   // --- Démarrage ---

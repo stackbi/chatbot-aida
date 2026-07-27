@@ -32,6 +32,12 @@ app.use("/admin", express.static(path.join(__dirname, "admin")));
 // sur les routes /api/admin/*.
 const widgetCors = cors({ origin: true, methods: ["GET", "POST"] });
 
+// En-têtes OpenRouter pour identifier l'application dans le dashboard
+const OR_HEADERS = {
+  "HTTP-Referer": process.env.SITE_URL || "https://aida-chatbot.local",
+  "X-Title": "Aïda Chatbot"
+};
+
 // Historique de conversation en mémoire par session
 // (pour la prod : remplacer par Redis ou une base de données)
 const conversations = new Map();
@@ -102,6 +108,77 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
 });
 
 // ---------------------------------------------------------------------------
+// Route admin : test de connexion à l'API OpenRouter
+// ---------------------------------------------------------------------------
+app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
+  try {
+    const { apiKey, model } = req.body;
+
+    // Utilise la clé fournie ou celle enregistrée
+    const testKey = apiKey || getSettings().apiKey;
+    const testModel = model || getSettings().model || "google/gemma-4-31b-it:free";
+
+    if (!testKey) {
+      return res.json({ ok: false, error: "Aucune clé API fournie." });
+    }
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
+      method: "POST",
+      headers: {
+        "Authorization": `Bearer ${testKey}`,
+        "Content-Type": "application/json",
+        ...OR_HEADERS
+      },
+      body: JSON.stringify({
+        model: testModel,
+        max_tokens: 10,
+        messages: [
+          { role: "user", content: "Test de connexion — réponds uniquement \"OK\"." }
+        ]
+      })
+    });
+
+    if (response.ok) {
+      const data = await response.json();
+      const reply = data.choices?.[0]?.message?.content || "";
+      const modelUsed = data.model || testModel;
+      res.json({
+        ok: true,
+        message: `Connexion réussie avec ${modelUsed}`,
+        model: modelUsed,
+        reply: reply.trim()
+      });
+    } else {
+      const errText = await response.text();
+      let detail = "";
+      let fullDetail = "";
+      try {
+        const errJson = JSON.parse(errText);
+        // OpenRouter emboîte souvent l'erreur réelle du provider
+        const rawMeta = errJson.error?.metadata?.raw;
+        const rawMsg =
+          rawMeta?.error?.message ||
+          (typeof rawMeta === "string" ? rawMeta : null);
+        detail = rawMsg || errJson.error?.message || errJson.error?.code || errText;
+        fullDetail = rawMsg ? errJson.error?.message + " : " + rawMsg : detail;
+      } catch {
+        detail = errText;
+        fullDetail = errText;
+      }
+      res.json({
+        ok: false,
+        error: detail,
+        fullError: fullDetail,
+        status: response.status
+      });
+    }
+  } catch (err) {
+    console.error("Erreur test connexion:", err);
+    res.json({ ok: false, error: err.message || "Erreur réseau" });
+  }
+});
+
+// ---------------------------------------------------------------------------
 // Routes admin : documents de contexte (base de connaissances / RAG)
 // ---------------------------------------------------------------------------
 app.get("/api/admin/documents", requireAdmin, (req, res) => {
@@ -167,7 +244,11 @@ app.delete("/api/admin/documents/:id", requireAdmin, (req, res) => {
 
 // ---------------------------------------------------------------------------
 // Route publique : chat (utilisée par le widget) avec rate limiter
+// Gère explicitement le preflight CORS OPTIONS — indispensable quand le widget
+// est chargé depuis un domaine différent (le site du client). Sans ce handler,
+// le navigateur bloque les requêtes POST avec Content-Type: application/json.
 // ---------------------------------------------------------------------------
+app.options("/api/chat", widgetCors);
 app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
   try {
     const { message, sessionId } = req.body;
@@ -192,30 +273,39 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     storedSession.lastActivity = Date.now();
     const history = [...storedSession.history, { role: "user", content: message }];
 
-    // 3. Appel à l'API Claude
-    const response = await fetch("https://api.anthropic.com/v1/messages", {
+    // 3. Appel à l'API OpenRouter (compatible OpenAI)
+    const messages = [
+      { role: "system", content: (settings.systemPrompt || "") + contextBlock },
+      ...history
+    ];
+
+    const response = await fetch("https://openrouter.ai/api/v1/chat/completions", {
       method: "POST",
       headers: {
-        "x-api-key": settings.apiKey,
-        "anthropic-version": "2023-06-01",
-        "content-type": "application/json"
+        "Authorization": `Bearer ${settings.apiKey}`,
+        "Content-Type": "application/json",
+        ...OR_HEADERS
       },
       body: JSON.stringify({
-        model: settings.model || "claude-3-5-sonnet-20241022",
-        max_tokens: settings.maxTokens || 500,
-        system: (settings.systemPrompt || "") + contextBlock,
-        messages: history
+        model: settings.model || "google/gemma-4-31b-it:free",
+        max_tokens: settings.maxTokens || 800,
+        messages
       })
     });
 
     if (!response.ok) {
       const errText = await response.text();
-      console.error("Erreur API Anthropic:", errText);
-      return res.status(502).json({ error: "Erreur du service IA. Vérifie la clé API dans /admin." });
+      console.error("Erreur API OpenRouter:", errText);
+      let detail = "Erreur du service IA.";
+      try {
+        const errJson = JSON.parse(errText);
+        detail = errJson.error?.message || errJson.error || detail;
+      } catch {}
+      return res.status(502).json({ error: `Erreur IA : ${detail}. Vérifie la clé API dans /admin.` });
     }
 
     const data = await response.json();
-    const reply = data.content?.[0]?.text || "Désolé, je n'ai pas compris.";
+    const reply = data.choices?.[0]?.message?.content || "Désolé, je n'ai pas compris.";
 
     // Sauvegarde de la conversation uniquement en cas de succès de l'appel
     const updatedHistory = [...history, { role: "assistant", content: reply }];
@@ -309,8 +399,25 @@ function generateSuggestions(documents) {
   return all.slice(0, 6);
 }
 
+// ─── Arrêt gracieux (graceful shutdown) ─────────────────────────────────
+function shutdown(signal) {
+  console.log(`\n${signal} reçu. Arrêt du serveur...`);
+  server.close(() => {
+    console.log("Serveur arrêté.");
+    process.exit(0);
+  });
+  // Force l'arrêt après 5s si les connexions ne se ferment pas
+  setTimeout(() => {
+    console.error("Arrêt forcé après timeout.");
+    process.exit(1);
+  }, 5000);
+}
+
+process.on("SIGINT", () => shutdown("SIGINT"));
+process.on("SIGTERM", () => shutdown("SIGTERM"));
+
 const PORT = process.env.PORT || 3000;
-app.listen(PORT, () => {
+const server = app.listen(PORT, () => {
   console.log(`Serveur démarré sur http://localhost:${PORT}`);
   console.log(`Tableau de bord admin : http://localhost:${PORT}/admin`);
 });
