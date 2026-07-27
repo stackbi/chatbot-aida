@@ -722,15 +722,50 @@
             <div class="field-hint" id="apikey-status"></div>
           </div>
           <div class="form-group">
-            <label for="set-model">Modèle IA</label>
+            <label for="set-groq-apikey">Clé API Groq <span style="color:var(--text-muted);font-weight:400;">(gratuit, fallback #1)</span></label>
+            <input id="set-groq-apikey" type="password" placeholder="gsk_..." />
+            <div class="field-hint" id="groq-apikey-status">Groq a un free tier très généreux (14 400 req/jour). Modèle : Llama 3.3 70B. <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent);">Obtenir une clé gratuite</a></div>
+          </div>
+          <details style="margin-top:4px;">
+            <summary style="cursor:pointer;font-size:0.76rem;color:var(--text-muted);font-weight:500;">➕ Autres fallbacks avancés</summary>
+            <div style="margin-top:12px;display:grid;gap:14px;">
+              <div class="form-group">
+                <label for="set-siliconflow-apikey">Clé API SiliconFlow <span style="color:var(--text-muted);font-weight:400;">(gratuit, fallback #2)</span></label>
+                <input id="set-siliconflow-apikey" type="password" placeholder="sf-..." />
+                <div class="field-hint" id="siliconflow-apikey-status">Modèles DeepSeek et Qwen gratuits. <a href="https://siliconflow.cn/models" target="_blank" style="color:var(--accent);">Voir les modèles</a></div>
+              </div>
+              <div class="form-group" style="border-top:1px solid var(--surface-border-light);padding-top:12px;">
+                <label for="set-openai-apikey">Clé API OpenAI <span style="color:var(--text-muted);font-weight:400;">(fallback #4, payant)</span></label>
+                <input id="set-openai-apikey" type="password" placeholder="sk-proj-..." />
+                <div class="field-hint" id="openai-apikey-status">Fallback ultime si tous les providers gratuits sont saturés (gpt-4o-mini).</div>
+              </div>
+              <div class="form-group" style="border-top:1px solid var(--surface-border-light);padding-top:12px;">
+                <label for="set-customapiurl">API personnalisée (URL) <span style="color:var(--text-muted);font-weight:400;">(fallback #3)</span></label>
+                <input id="set-customapiurl" type="text" placeholder="http://localhost:11434/v1" />
+                <div class="field-hint">Pour Ollama, vLLM, LocalAI, etc. L'URL doit exposer /v1/chat/completions.</div>
+              </div>
+              <div class="form-group">
+                <label for="set-customapikey">Clé API personnalisée</label>
+                <input id="set-customapikey" type="password" placeholder="sk-... (optionnel pour localhost)" />
+              </div>
+              <div class="form-group">
+                <label for="set-customapimodel">Modèle (API personnalisée)</label>
+                <input id="set-customapimodel" type="text" placeholder="llama3.1-8b" />
+                <div class="field-hint">Nom du modèle côté fournisseur (ex: llama3.1-8b, llama3.1:70b).</div>
+              </div>
+            </div>
+          </details>
+          <div class="form-group">
+            <label for="set-model">Modèle IA principal</label>
             <select id="set-model">
+                      <option value="openrouter/free">🔥 Auto : meilleur modèle gratuit dispo</option>
+              <option value="google/gemini-2.0-flash-exp:free">⚡ Gemini 2.0 Flash (free)</option>
               <option value="google/gemma-4-31b-it:free">⭐ Gemma 4 31B (free)</option>
-              <option value="google/gemma-2-9b-it:free">Gemma 2 9B (free)</option>
-              <option value="mistralai/mistral-7b-instruct:free">Mistral 7B (free)</option>
-              <option value="meta-llama/llama-3.1-8b:free">Llama 3.1 8B (free)</option>
+              <option value="meta-llama/llama-3.3-70b-instruct:free">🦙 Llama 3.3 70B (free)</option>
+              <option value="mistralai/mistral-large-2411:free">🌬️ Mistral Large (free)</option>
+              <option value="google/gemma-2-27b-it:free">Gemma 2 27B (free)</option>
               <option value="deepseek/deepseek-r1-distill-qwen-7b:free">DeepSeek R1 7B (free)</option>
               <option value="qwen/qwen-2.5-7b-instruct:free">Qwen 2.5 7B (free)</option>
-              <option value="openrouter/free">🔄 Auto : meilleur modèle gratuit dispo</option>
               <option value="custom">✏️ Autre modèle (saisie libre)</option>
             </select>
             <div class="field-hint" id="model-hint">Choisis un modèle ou sélectionne "Autre" pour saisir un slug personnalisé.</div>
@@ -753,6 +788,7 @@
               <label for="set-custommodel">Slug du modèle (OpenRouter)</label>
               <input id="set-custommodel" type="text" placeholder="google/gemma-4-31b-it:free" />
               <div class="field-hint">Ex: google/gemma-4-31b-it:free, anthropic/claude-3-haiku, etc.</div>
+              <div class="field-hint" style="margin-top:6px;color:var(--text-muted);">⬆ Chaîne de fallback : modèle principal → openrouter/free → OpenAI (gpt-4o-mini) si clé configurée</div>
             </div>
           </div>
           <div class="form-group">
@@ -989,31 +1025,39 @@
 
   // ─── Modèles connus avec leurs libellés d'affichage ────────────
   const KNOWN_MODELS = {
+    'openrouter/free':                  { label: 'Auto (meilleur gratuit)', tag: 'auto', emoji: '🔥' },
+    'google/gemini-2.0-flash-exp:free':{ label: 'Gemini 2.0 Flash',   tag: 'free', emoji: '⚡' },
     'google/gemma-4-31b-it:free':      { label: 'Gemma 4 31B',      tag: 'free',   emoji: '⭐' },
-    'google/gemma-2-9b-it:free':       { label: 'Gemma 2 9B',       tag: 'free',   emoji: '🧠' },
-    'mistralai/mistral-7b-instruct:free': { label: 'Mistral 7B',    tag: 'free',   emoji: '🌬️' },
-    'meta-llama/llama-3.1-8b:free':    { label: 'Llama 3.1 8B',     tag: 'free',   emoji: '🦙' },
+    'meta-llama/llama-3.3-70b-instruct:free': { label: 'Llama 3.3 70B', tag: 'free', emoji: '🦙' },
+    'mistralai/mistral-large-2411:free': { label: 'Mistral Large',   tag: 'free', emoji: '🌬️' },
+    'google/gemma-2-27b-it:free':      { label: 'Gemma 2 27B',      tag: 'free',   emoji: '🧠' },
     'deepseek/deepseek-r1-distill-qwen-7b:free': { label: 'DeepSeek R1 7B', tag: 'free', emoji: '🔍' },
-    'qwen/qwen-2.5-7b-instruct:free':  { label: 'Qwen 2.5 7B',      tag: 'free',   emoji: '✨' },
-    'openrouter/free':                  { label: 'Auto (meilleur gratuit)', tag: 'auto', emoji: '🔄' }
+    'qwen/qwen-2.5-7b-instruct:free':  { label: 'Qwen 2.5 7B',      tag: 'free',   emoji: '✨' }
   };
 
-  function updateModelIndicators(modelSlug, hasApiKey) {
+  function updateModelIndicators(modelSlug, hasApiKey, fallbackUsed, originalModel, hasOpenAiApiKey, hasGroqApiKey, hasSiliconflowApiKey, hasCustomApi) {
     const dot = document.getElementById('model-dot');
     const badgeName = document.getElementById('model-name-display');
     const statusIcon = document.getElementById('model-status-icon');
     const statusName = document.getElementById('model-status-name');
     const statusDesc = document.getElementById('model-status-desc');
     const statusTag = document.getElementById('model-status-tag');
+    const statusCard = document.getElementById('model-status-card');
 
     if (!hasApiKey) {
-      // Pas de clé → indicateur inactif
       dot.className = 'dot inactive';
       badgeName.textContent = 'Pas de clé API';
       statusIcon.className = 'status-icon warn';
       statusIcon.textContent = '⚠';
       statusName.textContent = 'Aucune clé API configurée';
-      statusDesc.textContent = 'Ajoute une clé OpenRouter pour activer l\'assistant';
+      const fallbacks = [
+        hasGroqApiKey && 'Groq',
+        hasSiliconflowApiKey && 'SiliconFlow',
+        hasCustomApi && 'API locale',
+        hasOpenAiApiKey && 'OpenAI'
+      ].filter(Boolean).join(' → ');
+      statusDesc.textContent = 'Ajoute une clé OpenRouter pour activer l\'assistant.' +
+        (fallbacks ? ` Fallbacks dispo : ${fallbacks}` : '');
       statusTag.textContent = 'INACTIF';
       statusTag.className = 'status-tag';
       return;
@@ -1040,7 +1084,35 @@
     statusIcon.className = 'status-icon ok';
     statusIcon.textContent = '✓';
     statusName.textContent = displayName;
-    statusDesc.textContent = `Slug : ${modelSlug}`;
+
+    if (fallbackUsed && originalModel && originalModel !== modelSlug) {
+      const isOpenAi = modelSlug.includes('OpenAI');
+      const isGroq = modelSlug.includes('Groq');
+      const isSiliconflow = modelSlug.includes('SiliconFlow');
+      const isCustom = modelSlug.includes('personnalis');
+      
+      let fallbackLabel = modelSlug;
+      if (isOpenAi) fallbackLabel = 'OpenAI gpt-4o-mini';
+      else if (isGroq) fallbackLabel = 'Groq (free, Llama 3.3 70B)';
+      else if (isSiliconflow) fallbackLabel = 'SiliconFlow (free, DeepSeek/Qwen)';
+      else if (isCustom) fallbackLabel = 'API personnalisée';
+      
+      statusDesc.textContent = `⚠ Fallback actif : ${fallbackLabel} (configuré : ${originalModel})`;
+      statusCard.style.borderColor = '#f59e0b';
+      statusCard.style.backgroundColor = '#fffbeb';
+    } else {
+      const fallbacks = [
+        'openrouter/free',
+        hasGroqApiKey && 'Groq',
+        hasSiliconflowApiKey && 'SiliconFlow',
+        hasCustomApi && 'API locale',
+        hasOpenAiApiKey && 'OpenAI'
+      ].filter(Boolean).join(' → ');
+      statusDesc.textContent = `Slug : ${modelSlug}${fallbacks ? ` — fallback : ${fallbacks}` : ''}`;
+      statusCard.style.borderColor = '';
+      statusCard.style.backgroundColor = '';
+    }
+
     statusTag.textContent = tagText;
     statusTag.className = 'status-tag' + (known?.tag === 'free' ? ' free' : known?.tag === 'auto' ? ' auto' : '');
   }
@@ -1055,6 +1127,44 @@
     try {
       const res = await apiFetch('/api/admin/settings');
       const s = await res.json();
+      // Groq key
+      document.getElementById('set-groq-apikey').value = '';
+      document.getElementById('set-groq-apikey').placeholder = s.hasGroqApiKey
+        ? 'Clé enregistrée (' + s.groqApiKey + ') — laisse vide pour ne pas changer'
+        : 'gsk_...';
+      document.getElementById('groq-apikey-status').textContent = s.hasGroqApiKey
+        ? '✓ Clé Groq configurée (14 400 req/jour gratuites — Llama 3.3 70B)'
+        : 'Optionnel — ajoute une clé Groq gratuite pour un fallback fiable.';
+
+      // SiliconFlow key
+      document.getElementById('set-siliconflow-apikey').value = '';
+      document.getElementById('set-siliconflow-apikey').placeholder = s.hasSiliconflowApiKey
+        ? 'Clé enregistrée (' + s.siliconflowApiKey + ') — laisse vide pour ne pas changer'
+        : 'sf-...';
+      document.getElementById('siliconflow-apikey-status').textContent = s.hasSiliconflowApiKey
+        ? '✓ Clé SiliconFlow configurée (DeepSeek/Qwen gratuits)'
+        : 'Optionnel — ajoute une clé SiliconFlow pour des modèles DeepSeek/Qwen.';
+
+      // OpenAI key
+      document.getElementById('set-openai-apikey').value = '';
+      document.getElementById('set-openai-apikey').placeholder = s.hasOpenAiApiKey
+        ? 'Clé enregistrée (' + s.openaiApiKey + ') — laisse vide pour ne pas changer'
+        : 'sk-proj-...';
+      document.getElementById('openai-apikey-status').textContent = s.hasOpenAiApiKey
+        ? '✓ Clé OpenAI configurée (fallback ultime)'
+        : 'Optionnel — ajoute une clé OpenAI pour un fallback ultime.';
+
+      // Custom API
+      document.getElementById('set-customapiurl').value = s.customApiUrl || '';
+      document.getElementById('set-customapiurl').placeholder = s.customApiUrl || 'http://localhost:11434/v1';
+      const hasCustomKey = s.hasCustomApiKey || !!s.customApiKey;
+      document.getElementById('set-customapikey').value = '';
+      document.getElementById('set-customapikey').placeholder = hasCustomKey
+        ? 'Clé enregistrée (' + (s.customApiKey || '••••') + ') — laisse vide pour ne pas changer'
+        : 'sk-... (optionnel pour localhost)';
+      document.getElementById('set-customapimodel').value = s.customApiModel || '';
+      document.getElementById('set-customapimodel').placeholder = s.customApiModel || 'llama3.1-8b';
+
       document.getElementById('set-apikey').value = '';
       document.getElementById('set-apikey').placeholder = s.hasApiKey
         ? 'Clé enregistrée (' + s.apiKey + ') — laisse vide pour ne pas changer'
@@ -1063,13 +1173,14 @@
         ? '✓ Une clé API est configurée.'
         : '⚠ Aucune clé API configurée — Aïda ne fonctionnera pas.';
 
-      const modelSlug = s.model || 'google/gemma-4-31b-it:free';
+      const modelSlug = s.model || 'openrouter/free';
       const modelSelect = document.getElementById('set-model');
       const customModelInput = document.getElementById('set-custommodel');
       const customModelContainer = document.getElementById('custom-model-container');
 
       // Met à jour les indicateurs visuels (badge top-bar + carte statut)
-      updateModelIndicators(modelSlug, s.hasApiKey);
+      // fallbackUsed est un état runtime, pas une valeur persistée
+      updateModelIndicators(modelSlug, s.hasApiKey, false, null, s.hasOpenAiApiKey, s.hasGroqApiKey, s.hasSiliconflowApiKey, !!s.customApiUrl);
 
       if (!KNOWN_MODELS[modelSlug]) {
         modelSelect.value = 'custom';
@@ -1115,8 +1226,14 @@
     const title = document.getElementById('test-title');
     const detail = document.getElementById('test-detail');
 
-    // Récupère la clé (nouvelle saisie ou déjà enregistrée)
+    // Récupère les clés (nouvelle saisie ou déjà enregistrée)
     const apiKey = document.getElementById('set-apikey').value;
+    const openaiApiKey = document.getElementById('set-openai-apikey').value;
+    const groqApiKey = document.getElementById('set-groq-apikey').value;
+    const siliconflowApiKey = document.getElementById('set-siliconflow-apikey').value;
+    const customApiUrl = document.getElementById('set-customapiurl').value;
+    const customApiKey = document.getElementById('set-customapikey').value;
+    const customApiModel = document.getElementById('set-customapimodel').value;
 
     let selectedModel = document.getElementById('set-model').value;
     if (selectedModel === 'custom') {
@@ -1133,15 +1250,38 @@
     try {
       const res = await apiFetch('/api/admin/test-connection', {
         method: 'POST',
-        body: JSON.stringify({ apiKey, model: selectedModel })
+        body: JSON.stringify({ apiKey, model: selectedModel, openaiApiKey, groqApiKey, siliconflowApiKey, customApiUrl, customApiKey, customApiModel })
       });
       const data = await res.json();
 
       if (data.ok) {
         resultBox.className = 'test-result show success';
         icon.textContent = '✓';
-        title.textContent = data.message || 'Connexion réussie !';
-        detail.textContent = data.reply ? `Réponse : "${data.reply}"` : '';
+
+        if (data.fallbackUsed) {
+          const modelStr = data.model || '';
+          let fallbackName = data.model;
+          if (modelStr.includes('OpenAI')) fallbackName = 'OpenAI gpt-4o-mini';
+          else if (modelStr.includes('Groq')) fallbackName = 'Groq (free, Llama 3.3 70B)';
+          else if (modelStr.includes('SiliconFlow')) fallbackName = 'SiliconFlow (free, DeepSeek/Qwen)';
+          else if (modelStr.includes('personnalis')) fallbackName = 'API personnalisée';
+          title.textContent = `⚠ Fallback activé — ${fallbackName}`;
+          detail.textContent = `Le modèle configuré (${data.originalModel}) était saturé. Fallback automatique vers ${data.model}. ${data.reply ? `Réponse : "${data.reply}"` : ''}`;
+        } else {
+          title.textContent = data.message || 'Connexion réussie !';
+          detail.textContent = data.reply ? `Réponse : "${data.reply}"` : '';
+        }
+
+        // Détermine l'état des fallbacks
+        const openAiInput = document.getElementById('set-openai-apikey');
+        const hasOpenAi = !!openAiInput.value || openAiInput.placeholder.includes('enregistrée');
+        const hasGroq = !!document.getElementById('set-groq-apikey').value || 
+          document.getElementById('set-groq-apikey').placeholder.includes('enregistrée');
+        const hasSiliconflow = !!document.getElementById('set-siliconflow-apikey').value || 
+          document.getElementById('set-siliconflow-apikey').placeholder.includes('enregistrée');
+        const hasCustomApi = !!document.getElementById('set-customapiurl').value;
+        // Met à jour l'indicateur visuel du modèle
+        updateModelIndicators(data.model, true, data.fallbackUsed, data.originalModel, hasOpenAi, hasGroq, hasSiliconflow, hasCustomApi);
       } else {
         resultBox.className = 'test-result show error';
         icon.textContent = '✗';
@@ -1149,7 +1289,7 @@
         if (data.status === 429) {
           title.textContent = '⚠ Trop de requêtes (429)';
           const extra = data.fullError && data.fullError !== data.error ? ` — ${data.fullError}` : '';
-          detail.textContent = 'Limite de taux atteinte.' + extra + ' Attends 1 minute ou utilise un autre modèle (openrouter/free).';
+          detail.textContent = 'Limite de taux atteinte.' + extra + ' Attends 1 minute ou utilise un autre modèle (openrouter/free) ou une clé OpenAI de fallback.';
         } else if (data.status === 402 || data.status === 403) {
           title.textContent = `Erreur d\'authentification (${data.status})`;
           detail.textContent = 'Ta clé API semble invalide ou a expiré. Vérifie-la sur openrouter.ai/keys.';
@@ -1185,6 +1325,12 @@
 
     const payload = {
       apiKey: document.getElementById('set-apikey').value,
+      openaiApiKey: document.getElementById('set-openai-apikey').value,
+      groqApiKey: document.getElementById('set-groq-apikey').value,
+      siliconflowApiKey: document.getElementById('set-siliconflow-apikey').value,
+      customApiUrl: document.getElementById('set-customapiurl').value,
+      customApiKey: document.getElementById('set-customapikey').value,
+      customApiModel: document.getElementById('set-customapimodel').value,
       model: selectedModel,
       maxTokens: parseInt(document.getElementById('set-maxtokens').value, 10) || 800,
       botName: document.getElementById('set-botname').value,
