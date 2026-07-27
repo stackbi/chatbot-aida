@@ -5,6 +5,7 @@ import path from "path";
 import { fileURLToPath } from "url";
 import { rateLimit } from "express-rate-limit";
 import { createRequire } from "module";
+import crypto from "crypto";
 import {
   getSettings,
   saveSettings,
@@ -125,19 +126,18 @@ async function callOpenRouterWithFallback({ apiKey, model, messages, maxTokens, 
       };
     }
 
-    // Rate limit — on essaye le modèle OpenRouter suivant si disponible
-    if (result.status === 429 && i < modelsToTry.length - 1) {
-      console.warn(`Rate limit OpenRouter sur ${currentModel}, fallback vers ${modelsToTry[i + 1]}`);
-      continue;
-    }
-
-    // 429 et plus de fallback OpenRouter → on passe aux fallbacks externes
-    if (result.status === 429 && i >= modelsToTry.length - 1) {
-      console.warn(`Rate limit OpenRouter sur tous les modèles, passage aux fallbacks externes`);
+    // Rate limit ou erreur serveur — on essaye le modèle OpenRouter suivant si disponible
+    if (result.status === 429 || result.status >= 500) {
+      if (i < modelsToTry.length - 1) {
+        console.warn(`OpenRouter ${result.status} sur ${currentModel}, fallback vers ${modelsToTry[i + 1]}`);
+        continue;
+      }
+      // Plus de fallback OpenRouter → on passe aux fallbacks externes
+      console.warn(`OpenRouter ${result.status} sur tous les modèles, passage aux fallbacks externes`);
       break;
     }
 
-    // Autre erreur → on remonte l'erreur
+    // Autre erreur (401, 403, etc.) → on remonte l'erreur
     return { ok: false, status: result.status, errText: result.errText };
   }
 
@@ -314,7 +314,15 @@ function requireAdmin(req, res, next) {
   next();
 }
 
-app.post("/api/admin/login", (req, res) => {
+const loginLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000, // 15 minutes
+  limit: 10, // maximum 10 tentatives par 15 minutes
+  message: { error: "Trop de tentatives. Réessayez dans 15 minutes." },
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+});
+
+app.post("/api/admin/login", loginLimiter, (req, res) => {
   const { password } = req.body;
   if (process.env.ADMIN_PASSWORD && password === process.env.ADMIN_PASSWORD) {
     return res.json({ ok: true });
@@ -349,9 +357,31 @@ app.get("/api/admin/settings", requireAdmin, (req, res) => {
 
 app.post("/api/admin/settings", requireAdmin, (req, res) => {
   const { apiKey, openaiApiKey, groqApiKey, siliconflowApiKey, customApiUrl, customApiKey, customApiModel, model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily } = req.body;
-  const patch = { model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily, customApiUrl, customApiModel };
 
-  // On ne remplace chaque clé que si une nouvelle valeur non masquée est envoyée
+  // Construit le patch en ne conservant que les champs explicitement fournis
+  const patch = {};
+
+  // Champs texte : on ne met à jour que s'ils sont présents dans la requête
+  if (model !== undefined) patch.model = model;
+  if (botName !== undefined) patch.botName = botName;
+  if (welcomeMessage !== undefined) patch.welcomeMessage = welcomeMessage;
+  if (systemPrompt !== undefined) patch.systemPrompt = systemPrompt;
+  if (accentColor !== undefined) patch.accentColor = accentColor;
+  if (accentColorDark !== undefined) patch.accentColorDark = accentColorDark;
+  if (fontFamily !== undefined) patch.fontFamily = fontFamily;
+  if (customApiUrl !== undefined) patch.customApiUrl = customApiUrl;
+  if (customApiModel !== undefined) patch.customApiModel = customApiModel;
+
+  // maxTokens : validation stricte
+  if (maxTokens !== undefined) {
+    const parsed = parseInt(maxTokens, 10);
+    if (isNaN(parsed) || parsed < 100 || parsed > 4000) {
+      return res.status(400).json({ error: "maxTokens doit être un nombre entre 100 et 4000" });
+    }
+    patch.maxTokens = parsed;
+  }
+
+  // On ne remplace chaque clé API que si une nouvelle valeur non masquée est envoyée
   if (apiKey && !apiKey.includes("•")) patch.apiKey = apiKey;
   if (openaiApiKey && !openaiApiKey.includes("•")) patch.openaiApiKey = openaiApiKey;
   if (groqApiKey && !groqApiKey.includes("•")) patch.groqApiKey = groqApiKey;
@@ -525,6 +555,9 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       return res.status(400).json({ error: "Message manquant" });
     }
 
+    // Génère un sessionId par défaut si non fourni (évite le partage d'historique)
+    const effectiveSessionId = sessionId || "anon-" + crypto.randomUUID();
+
     const settings = getSettings();
     if (!settings.apiKey) {
       return res.status(400).json({
@@ -538,7 +571,7 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     const contextBlock = buildContextBlock(relevantChunks);
 
     // 2. Historique de conversation (copie pour éviter la corruption en cas d'échec)
-    const storedSession = conversations.get(sessionId) || { history: [], lastActivity: Date.now() };
+    const storedSession = conversations.get(effectiveSessionId) || { history: [], lastActivity: Date.now() };
     storedSession.lastActivity = Date.now();
     const history = [...storedSession.history, { role: "user", content: message }];
 
@@ -585,7 +618,7 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
 
     // Sauvegarde de la conversation uniquement en cas de succès de l'appel
     const updatedHistory = [...history, { role: "assistant", content: reply }];
-    conversations.set(sessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
+    conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
 
     res.json({
       reply,
