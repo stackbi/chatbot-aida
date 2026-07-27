@@ -227,6 +227,7 @@
     .aida-msg {
       max-width: min(72%, 580px); padding: 10px 14px;
       font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap;
+      overflow-wrap: break-word; word-break: break-word;
       border-radius: 12px;
       animation: aida-msg-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
     }
@@ -597,6 +598,7 @@
         max-width: min(82%, 480px);
         font-size: 0.88rem;
         padding: 9px 13px;
+        overflow-wrap: break-word; word-break: break-word;
       }
       #aida-invite { padding: 18px 20px 14px; }
       #aida-invite-avatar { width: 48px; height: 48px; font-size: 1.3rem; }
@@ -674,6 +676,7 @@
         font-size: 0.84rem;
         padding: 8px 12px;
         line-height: 1.5;
+        overflow-wrap: break-word; word-break: break-word;
       }
       #aida-invite { padding: 16px 16px 12px; }
       #aida-invite-avatar { width: 42px; height: 42px; font-size: 1.15rem; margin-bottom: 8px; }

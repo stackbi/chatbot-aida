@@ -675,7 +675,6 @@ app.get("/api/widget-suggestions", widgetCors, (req, res) => {
 });
 
 function generateSuggestions(documents) {
-  // Suggestions par défaut
   const defaults = [
     "Quels sont vos services ?",
     "Comment puis-je vous contacter ?",
@@ -685,45 +684,54 @@ function generateSuggestions(documents) {
 
   if (!documents || documents.length === 0) return defaults;
 
-  // Génère des suggestions à partir des titres et contenus des documents
   const docSuggestions = [];
-  for (const doc of documents) {
-    const title = doc.title || "";
-    const content = doc.content || "";
+  const pushIfNew = (item) => { if (!docSuggestions.includes(item)) docSuggestions.push(item); };
 
-    // Suggestions basées sur le titre
-    if (title.toLowerCase().includes("faq") || title.toLowerCase().includes("question")) {
-      docSuggestions.push(`Questions fréquentes sur ${title.replace(/^(FAQ|Questions?)\s*/i, "").trim() || "nos services"}`);
-    } else if (title.toLowerCase().includes("contact")) {
-      docSuggestions.push("Comment vous contacter ?");
-    } else if (title.toLowerCase().includes("prix") || title.toLowerCase().includes("tarif") || title.toLowerCase().includes("forfait")) {
-      docSuggestions.push("Quels sont vos tarifs ?");
-    } else if (title.toLowerCase().includes("service") || title.toLowerCase().includes("offre")) {
-      docSuggestions.push(`Quels sont vos services ?`);
-    } else if (title.toLowerCase().includes("livraison") || title.toLowerCase().includes("expédition") || title.toLowerCase().includes("shipping")) {
-      docSuggestions.push("Quels sont les délais de livraison ?");
-    } else if (title.toLowerCase().includes("retour") || title.toLowerCase().includes("remboursement")) {
-      docSuggestions.push("Comment faire un retour ?");
-    } else if (title.toLowerCase().includes("garantie")) {
-      docSuggestions.push("Quelle est votre garantie ?");
-    } else {
-      docSuggestions.push(`Parlez-moi de ${title}`);
+  for (const doc of documents) {
+    const title = (doc.title || "").trim();
+    const content = doc.content || "";
+    const titleLower = title.toLowerCase();
+
+    // Extrait les questions du contenu (naturelles, jamais un nom de fichier)
+    const questionLines = content.split("\n")
+      .map(l => l.trim())
+      .filter(l => l.endsWith("?") && l.length > 10 && l.length < 100);
+    for (const q of questionLines) {
+      pushIfNew(q);
+      if (docSuggestions.length >= 8) break;
     }
 
-    // Extrais des questions potentielles du contenu
-    const questionLines = content.split("\n").filter(line => line.trim().endsWith("?"));
-    for (const q of questionLines) {
-      const clean = q.trim();
-      if (clean.length > 10 && clean.length < 100 && !docSuggestions.includes(clean)) {
-        docSuggestions.push(clean);
+    // Suggestions contextuelles sans jamais exposer le nom du fichier
+    if (/faq|question/.test(titleLower) && !/questions?\s+fréquentes/i.test(content)) {
+      pushIfNew("Questions fréquentes sur nos services");
+    } else if (/contact/.test(titleLower)) {
+      pushIfNew("Comment vous contacter ?");
+    } else if (/prix|tarif|forfait/.test(titleLower)) {
+      pushIfNew("Quels sont vos tarifs ?");
+    } else if (/service|offre/.test(titleLower)) {
+      pushIfNew("Quels sont vos services ?");
+    } else if (/livraison|expédition|shipping/.test(titleLower)) {
+      pushIfNew("Quels sont les délais de livraison ?");
+    } else if (/retour|remboursement/.test(titleLower)) {
+      pushIfNew("Comment faire un retour ?");
+    } else if (/garantie/.test(titleLower)) {
+      pushIfNew("Quelle est votre garantie ?");
+    } else if (/à propos|about|presentation|présentation/.test(titleLower)) {
+      pushIfNew("Pouvez-vous me présenter votre activité ?");
+    } else if (/produit|product|catalogue/.test(titleLower)) {
+      pushIfNew("Quels produits proposez-vous ?");
+    } else {
+      // Aucun mot-clé détecté → suggestion subtile depuis le contenu
+      if (content.length > 80) {
+        pushIfNew("Que contient ce document ?");
+        if (docSuggestions.length < 4) pushIfNew("Quels sont les points importants ?");
       }
-      if (docSuggestions.length >= 8) break;
     }
 
     if (docSuggestions.length >= 6) break;
   }
 
-  // Mélange avec les suggestions par défaut, dédoublonne et limite à 6
+  // Fusion avec les suggestions par défaut
   const all = [...new Set([...docSuggestions, ...defaults])];
   return all.slice(0, 6);
 }
