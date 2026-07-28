@@ -89,7 +89,8 @@
       pointer-events: none;
       transform: scale(0.8);
       visibility: hidden;
-      transition: opacity 0.25s ease, transform 0.25s ease, visibility 0s 0.25s;
+      z-index: 1;
+      transition: opacity 0.25s ease, transform 0.25s ease, visibility 0s 0s, z-index 0s 0s;
     }
 
     /* --- OVERLAY / BACKDROP IMMERSIF --- */
@@ -242,11 +243,13 @@
     #aida-messages::-webkit-scrollbar-thumb { background: rgb(255 255 255 / .15); border-radius: 99px; }
 
     .aida-msg {
-      max-width: min(75%, 580px); padding: 10px 14px;
-      font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap;
+      max-width: min(80%, 620px); padding: 12px 16px;
+      font-size: 0.88rem; line-height: 1.6;
       overflow-wrap: break-word; word-break: break-word;
-      border-radius: 12px;
+      hyphens: auto;
+      border-radius: 14px;
       animation: aida-msg-in 0.35s cubic-bezier(0.16, 1, 0.3, 1);
+      box-sizing: border-box;
     }
     @keyframes aida-msg-in {
       from { opacity: 0; transform: translateY(8px) scale(0.97); }
@@ -256,7 +259,6 @@
       align-self: flex-start;
       position: relative;
       isolation: isolate;
-      overflow: hidden;
       background:
         radial-gradient(ellipse 80% 50% at 15% 20%, color-mix(in srgb, var(--aida-accent) 12%, transparent) 0%, transparent 70%),
         radial-gradient(ellipse 50% 40% at 85% 80%, color-mix(in srgb, var(--aida-accent-dark) 8%, transparent) 0%, transparent 60%),
@@ -301,6 +303,58 @@
     .aida-msg.aida-error {
       color: #ff8a80; background: rgb(255 0 0 / .15);
       border: 1px solid rgb(255 0 0 / .25);
+    }
+
+    /* --- MISE EN FORME du texte dans les messages --- */
+    .aida-msg strong {
+      font-weight: 700;
+      color: inherit;
+    }
+    .aida-msg em {
+      font-style: italic;
+      color: inherit;
+    }
+    .aida-msg u {
+      text-decoration: underline;
+      text-underline-offset: 2px;
+    }
+    .aida-msg a {
+      color: #93c5fd;
+      text-decoration: underline;
+      text-underline-offset: 2px;
+      transition: opacity 0.2s ease;
+    }
+    .aida-msg a:hover {
+      opacity: 0.8;
+    }
+    .aida-msg code {
+      font-family: "SF Mono", "Fira Code", "Courier New", monospace;
+      font-size: 0.82em;
+      background: rgb(0 0 0 / .25);
+      padding: 1px 5px;
+      border-radius: 4px;
+      white-space: pre-wrap;
+      word-break: break-word;
+    }
+    .aida-msg pre {
+      margin: 6px 0;
+      padding: 10px 12px;
+      background: rgb(0 0 0 / .3);
+      border: 1px solid rgb(255 255 255 / .08);
+      border-radius: 8px;
+      overflow-x: auto;
+      font-size: 0.82em;
+      line-height: 1.45;
+    }
+    .aida-msg pre code {
+      background: none;
+      padding: 0;
+      border-radius: 0;
+      white-space: pre;
+    }
+    .aida-msg .aida-list-num {
+      font-weight: 600;
+      margin-right: 2px;
     }
 
     .aida-typing-dots { display: inline-flex; gap: 3px; }
@@ -594,9 +648,9 @@
       #aida-scroll-bottom { bottom: 76px; }
       #aida-messages { padding: 16px 24px; gap: 10px; }
       .aida-msg {
-        max-width: min(85%, 520px);
-        font-size: 0.9rem;
-        padding: 10px 14px;
+        max-width: min(88%, 500px);
+        font-size: 0.88rem;
+        padding: 11px 15px;
       }
       #aida-invite { padding: 20px 24px 16px; }
       #aida-invite-avatar { width: 52px; height: 52px; font-size: 1.4rem; }
@@ -683,8 +737,8 @@
       #aida-scroll-bottom { bottom: 72px; }
       #aida-messages { padding: 16px 20px; gap: 10px; }
       .aida-msg {
-        max-width: min(85%, 480px);
-        font-size: 0.88rem;
+        max-width: 90%;
+        font-size: 0.86rem;
         padding: 10px 14px;
         line-height: 1.55;
         overflow-wrap: break-word; word-break: break-word;
@@ -765,8 +819,8 @@
       #aida-scroll-bottom { bottom: 64px; }
       #aida-messages { padding: 12px 16px; gap: 8px; }
       .aida-msg {
-        max-width: 90%;
-        font-size: 0.84rem;
+        max-width: 92%;
+        font-size: 0.82rem;
         padding: 9px 12px;
         line-height: 1.5;
         overflow-wrap: break-word; word-break: break-word;
@@ -1057,11 +1111,55 @@
     } catch (_) { /* silencieux */ }
   }
 
+  // ─── Formateur markdown → HTML ───────────────────────────────────────────
+  function formatMessage(text) {
+    if (!text) return "";
+    // Échapper le HTML pour éviter les injections XSS
+    let html = text
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;");
+
+    // Convertir les sauts de ligne en <br>
+    html = html.replace(/\n/g, "<br>");
+
+    // Convertir **gras** (en priorité sur *italic*)
+    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
+
+    // Convertir *italic*
+    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+
+    // Convertir __souligné__
+    html = html.replace(/__(.+?)__/g, "<u>$1</u>");
+
+    // Convertir les listes non-ordonnées (lignes commençant par - ou *)
+    // On remplace d'abord les <br>- ou <br>* en <br>• pour marquer les items
+    html = html.replace(/(<br>|^)[\s]*[-*]\s+/gm, "$1• ");
+
+    // Convertir les listes ordonnées (lignes commençant par 1. 2. etc.)
+    html = html.replace(/(<br>|^)[\s]*(\d+)\.\s+/gm, "$1<span class=\"aida-list-num\">$2.</span> ");
+
+    // Convertir les URLs en liens cliquables
+    html = html.replace(
+      /(https?:\/\/[^\s<]+)/g,
+      '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
+    );
+
+    // Convertir le code inline (entre backticks)
+    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+    // Convertir les blocs de code (```...```)
+    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+
+    return html;
+  }
+
   // ─── Utilitaires ─────────────────────────────────────────────────────────
   let pendingScrollCount = 0;
+  let _scrollListenerAttached = false;
 
   function isNearBottom() {
-    const threshold = 100;
+    const threshold = 150;
     return messagesEl.scrollHeight - messagesEl.scrollTop - messagesEl.clientHeight < threshold;
   }
 
@@ -1100,7 +1198,7 @@
     if (type === "typing") {
       el.innerHTML = '<span class="aida-typing-dots"><span></span><span></span><span></span></span>';
     } else {
-      el.textContent = text;
+      el.innerHTML = formatMessage(text);
     }
     messagesEl.appendChild(el);
 
@@ -1301,6 +1399,18 @@
         el.querySelector(".aida-scroll-count")?.remove();
       }
       pendingScrollCount = 0;
+    } else {
+      // Si l'utilisateur remonte, on affiche l'indicateur de scroll
+      const el = document.getElementById("aida-scroll-bottom");
+      if (el && !el.classList.contains("aida-scroll-visible") && messagesEl.children.length > 2) {
+        el.classList.add("aida-scroll-visible");
+        if (!el.querySelector(".aida-scroll-count")) {
+          const badge = document.createElement("span");
+          badge.className = "aida-scroll-count";
+          badge.textContent = "⬆";
+          el.appendChild(badge);
+        }
+      }
     }
   }, { passive: true });
 
