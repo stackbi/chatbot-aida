@@ -1340,6 +1340,7 @@
   });
 
   // ─── Envoi de message ────────────────────────────────────────────────────
+  // ─── Envoi avec streaming SSE pour une expérience temps réel ────────────
   formEl.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = inputEl.value.trim();
@@ -1359,26 +1360,182 @@
     })();
 
     const typingEl = addMessage("...", "typing");
+    let botMsgEl = null;
+    let hasError = false;
 
     try {
-      const res = await fetch(BACKEND_ORIGIN + "/api/chat", {
+      const res = await fetch(BACKEND_ORIGIN + "/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
         body: JSON.stringify({ message: text, sessionId }),
       });
-      const data = await res.json();
-      typingEl.remove();
 
-      if (res.ok && data.reply) {
-        addMessage(data.reply, "bot");
-        playNotification();
-        setTimeout(showSuggestionChips, 600);
-      } else {
-        addMessage(data.error || "Une erreur est survenue. Veuillez réessayer.", "error");
+      if (!res.ok) {
+        // Fallback silencieux vers l'endpoint non-streaming si le streaming n'est pas dispo
+        const fallbackRes = await fetch(BACKEND_ORIGIN + "/api/chat", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, sessionId }),
+        });
+        const fallbackData = await fallbackRes.json();
+        typingEl.remove();
+        if (fallbackRes.ok && fallbackData.reply) {
+          addMessage(fallbackData.reply, "bot");
+          playNotification();
+        } else {
+          addMessage(fallbackData.error || "Une erreur est survenue.", "error");
+        }
+        return;
+      }
+
+      // Lecture du flux SSE
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let buffer = "";
+      let fullContent = "";
+
+      while (true) {
+        const { done, value } = await reader.read();
+        if (done) break;
+
+        buffer += decoder.decode(value, { stream: true });
+        const lines = buffer.split("\n");
+        buffer = lines.pop() || "";
+
+        for (const line of lines) {
+          const trimmed = line.trim();
+          if (!trimmed || !trimmed.startsWith("data: ")) continue;
+
+          try {
+            const data = JSON.parse(trimmed.slice(6));
+
+            if (data.token) {
+              if (!botMsgEl) {
+                typingEl.remove();
+                botMsgEl = addMessage("", "bot");
+              }
+              fullContent += data.token;
+              botMsgEl.innerHTML = formatMessage(fullContent);
+              if (isNearBottom()) {
+                messagesEl.scrollTop = messagesEl.scrollHeight;
+              }
+            }
+
+            if (data.error) {
+              hasError = true;
+              if (typingEl.parentNode) typingEl.remove();
+              addMessage(data.error, "error");
+            }
+
+            if (data.done) {
+              if (botMsgEl) {
+                playNotification();
+                setTimeout(showSuggestionChips, 600);
+              }
+            }
+          } catch { /* ignorer */ }
+        }
+      }
+
+      if (!botMsgEl && !hasError && typingEl.parentNode) {
+        typingEl.remove();
+        addMessage("Une erreur est survenue. Veuillez réessayer.", "error");
       }
     } catch (err) {
-      typingEl.remove();
-      addMessage("Impossible de contacter le serveur. Vérifiez votre connexion.", "error");
+      // ─── Reconnexion automatique (SSE) + fallback non-streaming ──
+      let reconnected = false;
+
+      // Attente 1s puis tentative de reconnexion SSE
+      if (typingEl.parentNode) {
+        typingEl.innerHTML = "Tentative de reconnexion...";
+      }
+      await new Promise(r => setTimeout(r, 1000));
+
+      try {
+        const retryRes = await fetch(BACKEND_ORIGIN + "/api/chat/stream", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ message: text, sessionId }),
+          signal: AbortSignal.timeout(8000),
+        });
+
+        if (retryRes.ok) {
+          // Nouveau flux réussi → remplacer l'ancien message bot
+          if (botMsgEl && botMsgEl.parentNode) botMsgEl.remove();
+          botMsgEl = null;
+          hasError = false;
+
+          const rdr = retryRes.body.getReader();
+          const dec = new TextDecoder();
+          let buf = "";
+          let content = "";
+
+          while (true) {
+            const { done, value } = await rdr.read();
+            if (done) break;
+
+            buf += dec.decode(value, { stream: true });
+            const lines = buf.split("\n");
+            buf = lines.pop() || "";
+
+            for (const line of lines) {
+              const t = line.trim();
+              if (!t || !t.startsWith("data: ")) continue;
+              try {
+                const d = JSON.parse(t.slice(6));
+                if (d.token) {
+                  if (!botMsgEl) {
+                    if (typingEl.parentNode) typingEl.remove();
+                    botMsgEl = addMessage("", "bot");
+                  }
+                  content += d.token;
+                  botMsgEl.innerHTML = formatMessage(content);
+                  if (isNearBottom()) messagesEl.scrollTop = messagesEl.scrollHeight;
+                }
+                if (d.error) {
+                  hasError = true;
+                  if (typingEl.parentNode) typingEl.remove();
+                  addMessage(d.error, "error");
+                }
+                if (d.done) {
+                  reconnected = true;
+                  if (botMsgEl) {
+                    playNotification();
+                    setTimeout(showSuggestionChips, 600);
+                  }
+                }
+              } catch { /* ignorer */ }
+            }
+          }
+        }
+      } catch { /* ignorer, fallback non-streaming */ }
+
+      // Si la reconnexion SSE a échoué → fallback non-streaming
+      if (!reconnected) {
+        try {
+          if (typingEl.parentNode) {
+            typingEl.innerHTML = "Récupération de la réponse...";
+          }
+
+          const fbRes = await fetch(BACKEND_ORIGIN + "/api/chat", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ message: text, sessionId }),
+          });
+          const fbData = await fbRes.json();
+          if (typingEl.parentNode) typingEl.remove();
+
+          if (fbRes.ok && fbData.reply) {
+            addMessage(fbData.reply, "bot");
+            playNotification();
+          } else {
+            addMessage(fbData.error || "Une erreur est survenue.", "error");
+          }
+        } catch {
+          if (typingEl.parentNode) typingEl.remove();
+          addMessage("Impossible de contacter le serveur. Vérifiez votre connexion.", "error");
+        }
+      }
     } finally {
       sendBtn.disabled = false;
       inputEl.focus();

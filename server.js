@@ -1,6 +1,7 @@
 import express from "express";
 import dotenv from "dotenv";
 import cors from "cors";
+import helmet from "helmet";
 import path from "path";
 import { fileURLToPath } from "url";
 import { rateLimit } from "express-rate-limit";
@@ -13,8 +14,8 @@ import {
   addDocument,
   deleteDocument
 } from "./lib/store.js";
-import { retrieveRelevantChunks, buildContextBlock } from "./lib/retrieval.js";
-import { ensureEmbeddingModel } from "./lib/embedding.js";
+import { retrieveRelevantChunks, retrieveRelevantChunksSync, buildContextBlock } from "./lib/retrieval.js";
+import { ensureEmbeddingModel, generateEmbedding, findSimilarChunks } from "./lib/embedding.js";
 
 const require = createRequire(import.meta.url);
 const { PDFParse } = require("pdf-parse");
@@ -25,14 +26,42 @@ const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
 app.use(express.json({ limit: "10mb" }));
+
+// ─── Headers de sécurité HTTP ──────────────────────────────────────────
+// CSP configuré pour permettre l'embedding du widget sur n'importe quel site
+// tout en bloquant les injections XSS et le MIME sniffing.
+app.use(helmet({
+  contentSecurityPolicy: {
+    directives: {
+      defaultSrc: ["'self'"],
+      styleSrc: ["'self'", "'unsafe-inline'"],
+      imgSrc: ["'self'", "data:", "blob:"],
+      connectSrc: ["'self'"],
+      fontSrc: ["'self'", "data:"],
+      formAction: ["'self'"],
+      frameAncestors: ["*"],
+      upgradeInsecureRequests: [],
+    },
+  },
+  crossOriginEmbedderPolicy: false,
+  crossOriginResourcePolicy: { policy: "cross-origin" },
+}));
+
 app.use(express.static(path.join(__dirname, "public")));
 app.use("/admin", express.static(path.join(__dirname, "admin")));
 
+// ─── CORS widget ────────────────────────────────────────────────────────
 // Le widget est chargé depuis le domaine du client (son propre site), donc les routes
 // qu'il appelle doivent accepter les requêtes cross-origin. Le tableau de bord admin,
 // lui, est toujours servi et utilisé depuis ce même backend, donc pas besoin de CORS
 // sur les routes /api/admin/*.
-const widgetCors = cors({ origin: true, methods: ["GET", "POST"] });
+//
+// Optionnel : restreindre les origines autorisées via la variable d'environnement CORS_ORIGINS
+// (séparateur virgule). Exemple : CORS_ORIGINS=https://monsite.com,https://client2.com
+const corsOrigins = process.env.CORS_ORIGINS
+  ? process.env.CORS_ORIGINS.split(",").map(s => s.trim()).filter(Boolean)
+  : true;
+const widgetCors = cors({ origin: corsOrigins, methods: ["GET", "POST"] });
 
 // En-têtes OpenRouter pour identifier l'application dans le dashboard
 const OR_HEADERS = {
@@ -81,199 +110,211 @@ async function apiCall({ baseUrl, apiKey, model, messages, maxTokens, extraHeade
 }
 
 /**
- * Appelle l'API OpenRouter avec fallback automatique et exponential backoff.
- * Chaîne de fallback (priorité décroissante) :
- *   1. Modèle configuré (via OpenRouter, défaut: openrouter/free)
- *   2. openrouter/free (fallback auto OpenRouter)
- *   3. Groq (free tier très généreux, si clé dispo)
- *   4. SiliconFlow (DeepSeek/Qwen gratuits, si clé dispo)
- *   5. API personnalisée (Ollama/vLLM en local, si URL configurée)
- *   6. OpenAI gpt-4o-mini (payant, si clé dispo — fallback ultime)
+ * Appel API en streaming (SSE) — écrit chaque token directement dans la réponse HTTP.
+ * Compatible OpenAI / OpenRouter / Groq / tout fournisseur OpenAI-like.
  */
-async function callOpenRouterWithFallback({ apiKey, model, messages, maxTokens, groqApiKey, siliconflowApiKey, customApiUrl, customApiKey, customApiModel, openaiApiKey }) {
-  // ── Phase 1 : essayer les modèles OpenRouter ──
-  const modelsToTry = [model];
+async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extraHeaders, res, signal }) {
+  const headers = {
+    "Content-Type": "application/json",
+    ...(apiKey ? { "Authorization": `Bearer ${apiKey}` } : {}),
+    ...(extraHeaders || {})
+  };
+
+  // Timeout de 30 secondes pour l'appel streaming
+  const timeoutSignal = AbortSignal.timeout(30000);
+  // Combine le signal passé (abortController) avec le timeout
+  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+
+  try {
+    const response = await fetch(`${baseUrl}/chat/completions`, {
+      method: "POST",
+      headers,
+      signal: combinedSignal,
+      body: JSON.stringify({
+        model,
+        max_tokens: maxTokens || 800,
+        messages,
+        stream: true
+      })
+    });
+
+    if (!response.ok) {
+      const errText = await response.text();
+      return { ok: false, status: response.status, errText };
+    }
+
+    const reader = response.body.getReader();
+    const decoder = new TextDecoder();
+    let fullContent = "";
+    let buffer = "";
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      buffer += decoder.decode(value, { stream: true });
+      const lines = buffer.split("\n");
+      buffer = lines.pop() || "";
+
+      for (const line of lines) {
+        const trimmed = line.trim();
+        if (!trimmed || !trimmed.startsWith("data: ")) continue;
+        const data = trimmed.slice(6);
+        if (data === "[DONE]") break;
+
+        try {
+          const parsed = JSON.parse(data);
+          const token = parsed.choices?.[0]?.delta?.content || "";
+          if (token) {
+            fullContent += token;
+            // Écrit directement dans la réponse SSE
+            res.write(`data: ${JSON.stringify({ token })}\n\n`);
+          }
+        } catch { /* ignorer les lignes mal formées */ }
+      }
+    }
+
+    // Envoie le signal de fin avec le contenu complet + modèle utilisé
+    res.write(`data: ${JSON.stringify({ done: true, fullContent })}\n\n`);
+    return { ok: true, fullContent };
+  } catch (err) {
+    if (err.name === "AbortError") {
+      return { ok: false, status: 499, errText: "Requête annulée" };
+    }
+    console.error(`Erreur réseau streaming (${baseUrl}):`, err.message);
+    return { ok: false, status: 503, errText: err.message || "Erreur réseau" };
+  }
+}
+
+/**
+ * Retourne la liste ordonnée des providers à essayer (OpenRouter → fallbacks externes)
+ * en fonction des clés configurées dans les settings.
+ */
+function getFallbackProviders(settings) {
+  const providers = [];
+  const configuredModel = settings.model || "openrouter/free";
+
+  // OpenRouter : modèle configuré + fallback openrouter/free
+  const orModels = [configuredModel];
   for (const fb of FALLBACK_MODELS) {
-    if (fb !== model) modelsToTry.push(fb);
+    if (fb !== configuredModel) orModels.push(fb);
+  }
+  for (const m of orModels) {
+    providers.push({
+      name: m,
+      model: m,
+      baseUrl: "https://openrouter.ai/api/v1",
+      apiKey: settings.apiKey,
+      extraHeaders: OR_HEADERS
+    });
   }
 
-  for (let i = 0; i < modelsToTry.length; i++) {
-    const currentModel = modelsToTry[i];
+  // Fallbacks externes
+  if (settings.groqApiKey) {
+    providers.push({
+      name: "Groq",
+      model: "llama-3.3-70b-versatile",
+      baseUrl: "https://api.groq.com/openai/v1",
+      apiKey: settings.groqApiKey
+    });
+  }
+  if (settings.siliconflowApiKey) {
+    providers.push({
+      name: "SiliconFlow",
+      model: "deepseek-ai/DeepSeek-V3",
+      baseUrl: "https://api.siliconflow.cn/v1",
+      apiKey: settings.siliconflowApiKey
+    });
+  }
+  if (settings.customApiUrl) {
+    providers.push({
+      name: "API locale",
+      model: settings.customApiModel || "llama3.1-8b",
+      baseUrl: settings.customApiUrl.replace(/\/+$/, ""),
+      apiKey: settings.customApiKey || ""
+    });
+  }
+  if (settings.openaiApiKey) {
+    providers.push({
+      name: "OpenAI",
+      model: "gpt-4o-mini",
+      baseUrl: "https://api.openai.com/v1",
+      apiKey: settings.openaiApiKey
+    });
+  }
 
-    // Exponential backoff avant chaque fallback (sauf le premier essai)
+  return providers;
+}
+
+/**
+ * Parcourt la chaîne de providers avec backoff exponentiel.
+ * Appelle `apiCaller(provider, options)` pour chaque tentative.
+ * Retourne le premier résultat ok ou le dernier échec.
+ */
+async function tryProviderChain(providers, apiCaller, options) {
+  let lastResult = null;
+
+  for (let i = 0; i < providers.length; i++) {
+    const provider = providers[i];
+
+    // Backoff exponentiel avant chaque fallback (sauf le premier)
     if (i > 0) {
-      const delayMs = Math.min(500 * Math.pow(2, i - 1), 8000);
-      console.warn(`⏳ Attente ${delayMs}ms avant fallback vers ${currentModel}...`);
+      const delayMs = Math.min(200 * Math.pow(2, i - 1), 2000);
+      console.warn(`⏳ Fallback ${provider.name} (attente ${delayMs}ms)...`);
       await new Promise(r => setTimeout(r, delayMs));
     }
 
-    const result = await apiCall({
-      baseUrl: "https://openrouter.ai/api/v1",
-      apiKey,
-      model: currentModel,
-      messages,
-      maxTokens,
-      extraHeaders: OR_HEADERS
+    const result = await apiCaller({
+      baseUrl: provider.baseUrl,
+      apiKey: provider.apiKey,
+      model: provider.model,
+      messages: options.messages,
+      maxTokens: options.maxTokens,
+      extraHeaders: provider.extraHeaders || {},
+      ...(options.streamRes ? { res: options.streamRes, signal: options.signal } : {})
     });
 
     if (result.ok) {
       return {
         ok: true,
         data: result.data,
-        modelUsed: result.modelUsed,
+        fullContent: result.fullContent,
+        modelUsed: provider.extraHeaders ? result.modelUsed : `${result.modelUsed} (${provider.name} fallback)`,
         fallbackUsed: i > 0,
-        originalModel: model
+        originalModel: providers[0].model,
+        provider
       };
     }
 
-    // Rate limit ou erreur serveur — on essaye le modèle OpenRouter suivant si disponible
-    if (result.status === 429 || result.status >= 500) {
-      if (i < modelsToTry.length - 1) {
-        console.warn(`OpenRouter ${result.status} sur ${currentModel}, fallback vers ${modelsToTry[i + 1]}`);
-        continue;
-      }
-      // Plus de fallback OpenRouter → on passe aux fallbacks externes
-      console.warn(`OpenRouter ${result.status} sur tous les modèles, passage aux fallbacks externes`);
-      break;
+    lastResult = result;
+
+    // Erreur non-récupérable (401, 403, etc.) → stop immédiat
+    if (result.status !== 429 && result.status < 500) {
+      console.error(`Erreur ${provider.name}:`, result.errText);
+      return { ok: false, status: result.status, errText: result.errText, provider };
     }
 
-    // Autre erreur (401, 403, etc.) → on remonte l'erreur
-    return { ok: false, status: result.status, errText: result.errText };
+    // 429 ou 5xx → continue vers le provider suivant
+    console.warn(`${provider.name} ${result.status}, passage au suivant`);
   }
 
-  // Compteur de tentatives pour le backoff exponentiel
-  let attemptCount = modelsToTry.length;
+  // Tous les providers ont échoué
+  return lastResult || { ok: false, status: 503, errText: "Aucun fournisseur disponible" };
+}
 
-  // ── Phase 2 : fallback Groq (gratuit, ultra-rapide) ──
-  if (groqApiKey) {
-    attemptCount++;
-    const delayMs = Math.min(500 * Math.pow(2, attemptCount - 1), 8000);
-    console.warn(`⏳ Attente ${delayMs}ms avant fallback Groq...`);
-    await new Promise(r => setTimeout(r, delayMs));
-
-    const result = await apiCall({
-      baseUrl: "https://api.groq.com/openai/v1",
-      apiKey: groqApiKey,
-      model: "llama-3.3-70b-versatile",
-      messages,
-      maxTokens
-    });
-
-    if (result.ok) {
-      return {
-        ok: true,
-        data: result.data,
-        modelUsed: `${result.modelUsed} (Groq fallback)`,
-        fallbackUsed: true,
-        originalModel: model
-      };
-    }
-
-    if (result.status !== 429) {
-      console.error("Erreur Groq:", result.errText);
-      return { ok: false, status: result.status, errText: result.errText };
-    }
-    // 429 → continue vers le fallback suivant
-    console.warn("Rate limit Groq, passage au fallback suivant");
-  }
-
-  // ── Phase 3 : fallback SiliconFlow (DeepSeek/Qwen gratuits) ──
-  if (siliconflowApiKey) {
-    attemptCount++;
-    const delayMs = Math.min(500 * Math.pow(2, attemptCount - 1), 8000);
-    console.warn(`⏳ Attente ${delayMs}ms avant fallback SiliconFlow...`);
-    await new Promise(r => setTimeout(r, delayMs));
-
-    const result = await apiCall({
-      baseUrl: "https://api.siliconflow.cn/v1",
-      apiKey: siliconflowApiKey,
-      model: "deepseek-ai/DeepSeek-V3",
-      messages,
-      maxTokens
-    });
-
-    if (result.ok) {
-      return {
-        ok: true,
-        data: result.data,
-        modelUsed: `${result.modelUsed} (SiliconFlow fallback)`,
-        fallbackUsed: true,
-        originalModel: model
-      };
-    }
-
-    if (result.status !== 429) {
-      console.error("Erreur SiliconFlow:", result.errText);
-      return { ok: false, status: result.status, errText: result.errText };
-    }
-    // 429 → continue vers le fallback suivant
-    console.warn("Rate limit SiliconFlow, passage au fallback suivant");
-  }
-
-  // ── Phase 4 : fallback API personnalisée ──
-  if (customApiUrl) {
-    attemptCount++;
-    const delayMs = Math.min(500 * Math.pow(2, attemptCount - 1), 8000);
-    console.warn(`⏳ Attente ${delayMs}ms avant fallback vers API personnalisée...`);
-    await new Promise(r => setTimeout(r, delayMs));
-
-    const result = await apiCall({
-      baseUrl: customApiUrl.replace(/\/+$/, ""),
-      apiKey: customApiKey || "",
-      model: customApiModel || "llama3.1-8b",
-      messages,
-      maxTokens
-    });
-
-    if (result.ok) {
-      return {
-        ok: true,
-        data: result.data,
-        modelUsed: `${result.modelUsed} (API personnalisée fallback)`,
-        fallbackUsed: true,
-        originalModel: model
-      };
-    }
-
-    if (result.status !== 429) {
-      console.error("Erreur API personnalisée:", result.errText);
-      return { ok: false, status: result.status, errText: result.errText };
-    }
-    // 429 → continue vers OpenAI
-    console.warn("Rate limit API personnalisée, passage au fallback suivant");
-  }
-
-  // ── Phase 5 : fallback OpenAI (payant, ultime recours) ──
-  if (openaiApiKey) {
-    attemptCount++;
-    const delayMs = Math.min(500 * Math.pow(2, attemptCount - 1), 8000);
-    console.warn(`⏳ Attente ${delayMs}ms avant fallback OpenAI...`);
-    await new Promise(r => setTimeout(r, delayMs));
-
-    const result = await apiCall({
-      baseUrl: "https://api.openai.com/v1",
-      apiKey: openaiApiKey,
-      model: "gpt-4o-mini",
-      messages,
-      maxTokens
-    });
-
-    if (result.ok) {
-      return {
-        ok: true,
-        data: result.data,
-        modelUsed: "gpt-4o-mini (OpenAI fallback)",
-        fallbackUsed: true,
-        originalModel: model
-      };
-    }
-
-    console.error("Erreur API OpenAI:", result.errText);
-    return { ok: false, status: result.status, errText: result.errText };
-  }
-
-  // Aucun fallback disponible
-  return { ok: false, status: 429, errText: "Tous les modèles sont saturés ou aucun fallback configuré" };
+/**
+ * Appelle l'API avec fallback automatique (version non-streaming).
+ * Maintient la compatibilité avec les appels existants.
+ */
+async function callOpenRouterWithFallback({ apiKey, model, messages, maxTokens, groqApiKey, siliconflowApiKey, customApiUrl, customApiKey, customApiModel, openaiApiKey }) {
+  const settings = {
+    apiKey, model, maxTokens,
+    groqApiKey, siliconflowApiKey,
+    customApiUrl, customApiKey, customApiModel,
+    openaiApiKey
+  };
+  const providers = getFallbackProviders(settings);
+  return await tryProviderChain(providers, apiCall, { messages, maxTokens });
 }
 
 // Historique de conversation en mémoire par session
@@ -379,8 +420,21 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
   if (accentColor !== undefined) patch.accentColor = accentColor;
   if (accentColorDark !== undefined) patch.accentColorDark = accentColorDark;
   if (fontFamily !== undefined) patch.fontFamily = fontFamily;
-  if (customApiUrl !== undefined) patch.customApiUrl = customApiUrl;
-  if (customApiModel !== undefined) patch.customApiModel = customApiModel;
+  // customApiUrl et customApiModel : seulement si une valeur est fournie
+  // (évite d'écraser avec une chaîne vide quand l'utilisateur sauvegarde d'autres champs)
+  if (customApiUrl) patch.customApiUrl = customApiUrl;
+  if (customApiModel) patch.customApiModel = customApiModel;
+
+  // fontFamily : validation stricte pour éviter l'injection CSS
+  // Seuls les caractères alphanumériques, espaces, tirets et virgules sont autorisés
+  // Les guillemets sont supprimés car inutiles et dangereux dans le CSS inline
+  if (fontFamily !== undefined) {
+    const sanitized = fontFamily.replace(/['"]+/g, "").trim();
+    if (sanitized && !/^[a-zA-Z0-9\s,\-]+$/.test(sanitized)) {
+      return res.status(400).json({ error: "Nom de police invalide : seuls les caractères alphanumériques, espaces, tirets et virgules sont autorisés." });
+    }
+    patch.fontFamily = sanitized;
+  }
 
   // maxTokens : validation stricte
   if (maxTokens !== undefined) {
@@ -569,6 +623,10 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     if (!message || typeof message !== "string") {
       return res.status(400).json({ error: "Message manquant" });
     }
+    // Validation : limite de taille du message
+    if (message.length > 4000) {
+      return res.status(400).json({ error: "Message trop long (maximum 4000 caractères)." });
+    }
 
     // Génère un sessionId par défaut si non fourni (évite le partage d'historique)
     const effectiveSessionId = sessionId || "anon-" + crypto.randomUUID();
@@ -580,9 +638,18 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       });
     }
 
-    // 1. Récupération du contexte pertinent (RAG vectoriel + mots-clés)
-    const documents = getDocuments();
-    const relevantChunks = await retrieveRelevantChunks(documents, message, 4);
+    // 1. Récupération du contexte pertinent (RAG vectoriel + mots-clés) via cache
+    const { documents, chunkEntries } = getRagContext();
+    const queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
+      ? await generateEmbedding(message).catch(() => null)
+      : null;
+    let relevantChunks = [];
+    if (queryEmbedding) {
+      relevantChunks = findSimilarChunks(queryEmbedding, chunkEntries, 4);
+    }
+    if (relevantChunks.length === 0) {
+      relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
+    }
     const contextBlock = buildContextBlock(relevantChunks);
 
     // 2. Historique de conversation (copie pour éviter la corruption en cas d'échec)
@@ -647,6 +714,118 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
   }
 });
 
+// ---------------------------------------------------------------------------
+// Route publique : chat en streaming (SSE) — temps réel, ultra-rapide
+// Utilise la même logique que /api/chat mais envoie chaque token au fur et à mesure.
+// ---------------------------------------------------------------------------
+app.options("/api/chat/stream", widgetCors);
+app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
+  // SSE headers
+  res.setHeader("Content-Type", "text/event-stream");
+  res.setHeader("Cache-Control", "no-cache");
+  res.setHeader("Connection", "keep-alive");
+  res.setHeader("X-Accel-Buffering", "no");
+  res.flushHeaders();
+
+  try {
+    const { message, sessionId } = req.body;
+    if (!message || typeof message !== "string") {
+      res.write(`data: ${JSON.stringify({ error: "Message manquant" })}\n\n`);
+      return res.end();
+    }
+    if (message.length > 4000) {
+      res.write(`data: ${JSON.stringify({ error: "Message trop long (maximum 4000 caractères)." })}\n\n`);
+      return res.end();
+    }
+
+    const effectiveSessionId = sessionId || "anon-" + crypto.randomUUID();
+    const settings = getSettings();
+
+    if (!settings.apiKey) {
+      res.write(`data: ${JSON.stringify({ error: "Aucune clé API configurée" })}\n\n`);
+      return res.end();
+    }
+
+    // 1. Contexte RAG (avec cache intégré)
+    const { chunkEntries } = getRagContext();
+    const queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
+      ? await generateEmbedding(message).catch(() => null)
+      : null;
+    
+    let relevantChunks = [];
+    if (queryEmbedding) {
+      relevantChunks = findSimilarChunks(queryEmbedding, chunkEntries, 4);
+    }
+    if (relevantChunks.length === 0) {
+      const docs = ragCache.documents || getDocuments();
+      relevantChunks = retrieveRelevantChunksSync(docs, message, 4);
+    }
+    const contextBlock = buildContextBlock(relevantChunks);
+
+    // 2. Historique
+    const storedSession = conversations.get(effectiveSessionId) || { history: [], lastActivity: Date.now() };
+    storedSession.lastActivity = Date.now();
+    const history = [...storedSession.history, { role: "user", content: message }];
+
+    // 3. Messages pour l'API
+    const messages = [
+      { role: "system", content: (settings.systemPrompt || "") + contextBlock },
+      ...history
+    ];
+
+    // 4. Chaîne de fallback via la fonction partagée
+    const abortController = new AbortController();
+    const providers = getFallbackProviders(settings);
+
+    const streamResult = await tryProviderChain(providers, (opts) => apiCallStream({ ...opts, res, signal: abortController.signal }), {
+      messages,
+      maxTokens: settings.maxTokens || 800
+    });
+
+    if (!streamResult.ok) {
+      const errStatus = streamResult.status;
+      let errMsg;
+      if (errStatus === 401 || errStatus === 403) {
+        errMsg = "La clé API est invalide ou a expiré. Vérifie-la dans /admin.";
+      } else if (errStatus === 429) {
+        errMsg = "Tous les fournisseurs sont saturés (429). Réessaie dans quelques instants.";
+      } else if (errStatus >= 500) {
+        errMsg = "Les fournisseurs IA sont temporairement indisponibles. Réessaie plus tard.";
+      } else {
+        errMsg = "Erreur de connexion aux fournisseurs IA. Vérifie ta configuration dans /admin.";
+      }
+      res.write(`data: ${JSON.stringify({ error: errMsg })}\n\n`);
+      return res.end();
+    }
+
+    // Sauvegarde de la conversation
+    const fullReply = streamResult.fullContent || "";
+    const updatedHistory = [...history, { role: "assistant", content: fullReply }];
+    conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
+
+    // Signal de fin avec métadonnées
+    res.write(`data: ${JSON.stringify({ done: true, fullContent, modelUsed: streamResult.modelUsed, fallbackUsed: streamResult.fallbackUsed, sourcesUsed: relevantChunks.map(r => r.title) })}\n\n`);
+    res.end();
+  } catch (err) {
+    console.error("Erreur streaming:", err);
+    try {
+      res.write(`data: ${JSON.stringify({ error: "Erreur serveur" })}\n\n`);
+      res.end();
+    } catch { /* already closed */ }
+  }
+});
+
+// Health check pour monitoring / load balancer
+app.get("/api/health", (req, res) => {
+  res.json({
+    status: "ok",
+    uptime: process.uptime(),
+    timestamp: new Date().toISOString(),
+    version: "1.0.0",
+    embedding: !!require("./lib/embedding.js") // vérifie que le module est accessible
+  });
+});
+
 // Le widget lit ces infos publiques (nom du bot, message d'accueil) au chargement
 app.get("/api/widget-config", widgetCors, (req, res) => {
   const settings = getSettings();
@@ -658,6 +837,34 @@ app.get("/api/widget-config", widgetCors, (req, res) => {
     fontFamily: settings.fontFamily || "system-ui"
   });
 });
+
+// ─── Cache RAG : documents + chunks chargés en mémoire ────────────────
+// Évite de relire data/store.json à chaque requête chat
+let ragCache = { documents: null, chunks: [], lastReload: 0 };
+const RAG_CACHE_TTL = 5000; // 5 secondes entre chaque rechargement
+
+function getRagContext() {
+  const now = Date.now();
+  if (!ragCache.documents || now - ragCache.lastReload > RAG_CACHE_TTL) {
+    ragCache.documents = getDocuments();
+    ragCache.lastReload = now;
+    // Pré-construit la liste plate chunks + titres pour la recherche
+    const entries = [];
+    for (const doc of ragCache.documents) {
+      if (doc.chunks) {
+        for (let i = 0; i < doc.chunks.length; i++) {
+          entries.push({
+            chunk: doc.chunks[i],
+            embedding: doc.embeddings?.[i] || null,
+            title: doc.title || "Sans titre"
+          });
+        }
+      }
+    }
+    ragCache.chunks = entries;
+  }
+  return { documents: ragCache.documents, chunkEntries: ragCache.chunks };
+}
 
 // Cache pour les suggestions (regénéré toutes les 30s)
 let suggestionsCache = [];
