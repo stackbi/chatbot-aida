@@ -1007,18 +1007,26 @@
   }
 
   document.getElementById('login-btn').addEventListener('click', async () => {
-    const password = document.getElementById('login-password').value;
-    const res = await fetch('/api/admin/login', {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ password })
-    });
-    if (res.ok) {
-      adminPassword = password;
-      sessionStorage.setItem('adminPassword', password);
-      showDashboard();
-    } else {
-      document.getElementById('login-error').textContent = 'Mot de passe incorrect.';
+    try {
+      const password = document.getElementById('login-password').value;
+      const res = await fetch('/api/admin/login', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ password })
+      });
+      if (res.ok) {
+        adminPassword = password;
+        sessionStorage.setItem('adminPassword', password);
+        showDashboard();
+      } else if (res.status === 429) {
+        document.getElementById('login-error').textContent = 'Trop de tentatives. Réessaie dans 15 minutes.';
+      } else if (res.status === 401) {
+        document.getElementById('login-error').textContent = 'Mot de passe incorrect.';
+      } else {
+        document.getElementById('login-error').textContent = 'Erreur (' + res.status + '). Vérifie que le serveur est bien lancé.';
+      }
+    } catch (err) {
+      document.getElementById('login-error').textContent = 'Erreur réseau : impossible de joindre le serveur.';
     }
   });
 
