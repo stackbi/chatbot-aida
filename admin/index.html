@@ -467,6 +467,7 @@
   /* Responsive Tablet & Mobile */
   @media (max-width: 1024px) {
     .top-bar { padding: 0 20px; }
+    .top-bar h1 span { display: none; }
     .dashboard-body { padding: 24px 16px 60px; max-width: 100%; }
     .form-grid { grid-template-columns: 1fr; }
     .color-grid { grid-template-columns: repeat(auto-fit, minmax(160px, 1fr)); }
@@ -474,16 +475,26 @@
 
   @media (max-width: 640px) {
     .top-bar { padding: 0 16px; height: 56px; }
-    .top-bar h1 { font-size: 1.05rem; }
-    .dashboard-body { padding: 16px 12px 60px; }
+    .top-bar h1 { font-size: 1rem; }
+    .top-bar h1 span { display: none; }
+    .top-bar-right { gap: 8px; }
+    .model-badge { max-width: 140px; font-size: 0.65rem; padding: 3px 10px 3px 6px; }
+    .logout-btn { padding: 6px 10px; font-size: 0.72rem; }
+    .dashboard-body { padding: 14px 12px 60px; }
     .card { padding: 18px 14px; border-radius: 14px; }
-    .card-header-text h2 { font-size: 1.1rem; }
+    .card-header-text h2 { font-size: 0.95rem; }
+    .card .hint { font-size: 0.78rem; }
     .color-grid { grid-template-columns: 1fr; }
-    .tabs { flex-direction: row; overflow-x: auto; gap: 4px; border-bottom: 1px solid var(--border); padding-bottom: 2px; }
-    .tab-btn { padding: 8px 14px; font-size: 0.82rem; white-space: nowrap; flex-shrink: 0; }
+    .tabs { flex-direction: row; overflow-x: auto; gap: 4px; border-bottom: 1px solid var(--surface-border); padding-bottom: 2px; border-radius: var(--radius-md) var(--radius-md) 0 0; }
+    .tab-btn { padding: 8px 12px; font-size: 0.8rem; white-space: nowrap; flex-shrink: 0; }
     .doc-item { flex-direction: column; align-items: flex-start; gap: 8px; }
     .doc-item .btn-danger { align-self: flex-end; }
     #login-box { padding: 24px 18px; width: 92%; }
+    #login-box h1 { font-size: 1.15rem; }
+    #login-box p { font-size: 0.82rem; }
+    #login-password { font-size: 16px; }
+    .actions-row { flex-wrap: wrap; }
+    .btn { padding: 10px 16px; font-size: 0.84rem; min-height: 44px; }
   }
 
   /* ── Test de connexion ── */

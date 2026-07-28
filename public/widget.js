@@ -42,7 +42,7 @@
       background: linear-gradient(135deg, var(--aida-accent), var(--aida-accent-dark));
       border: none; box-shadow: 0 6px 20px rgba(0,0,0,0.15);
       cursor: pointer; z-index: 2147483000;
-      transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease;
+      transition: transform 0.35s cubic-bezier(0.34, 1.56, 0.64, 1), box-shadow 0.2s ease, opacity 0.25s ease;
       touch-action: manipulation;
     }
     #aida-launcher::before {
@@ -57,8 +57,12 @@
     }
     #aida-launcher:hover { transform: scale(1.08); box-shadow: 0 8px 28px rgba(0,0,0,0.25), 0 0 20px rgb(47 111 237 / .15); }
     #aida-launcher:hover::before { animation: none; opacity: 0; }
-    #aida-launcher:active { transform: scale(0.94); }
     #aida-launcher svg { width: 26px; height: 26px; fill: white; display: block; margin: auto; position: relative; z-index: 1; }
+    #aida-launcher:active { transform: scale(0.94); }
+    @media (min-width: 620px) and (max-width: 959px) {
+      #aida-launcher { width: 54px; height: 54px; }
+      #aida-launcher svg { width: 24px; height: 24px; }
+    }
 
     /* Tooltip survol */
     #aida-launcher-tip {
@@ -77,6 +81,16 @@
       transform: translateY(-50%) rotate(45deg);
     }
     #aida-launcher:hover + #aida-launcher-tip { opacity: 1; transform: translateX(0); }
+
+    /* Cacher le launcher quand le popup est ouvert (évite de masquer le bouton d'envoi) */
+    #aida-launcher.aida-hidden,
+    #aida-launcher.aida-hidden + #aida-launcher-tip {
+      opacity: 0;
+      pointer-events: none;
+      transform: scale(0.8);
+      visibility: hidden;
+      transition: opacity 0.25s ease, transform 0.25s ease, visibility 0s 0.25s;
+    }
 
     /* --- OVERLAY / BACKDROP IMMERSIF --- */
     #aida-overlay {
@@ -211,6 +225,10 @@
     }
     #aida-close:hover { background: rgb(255 255 255 / .2); color: rgb(255 255 255 / .95); }
     #aida-close:active { transform: scale(0.92); }
+    /* Supprime le flash gris sur mobile (WebKit) */
+    #aida-close, #aida-send, #aida-suggestions button, #aida-invite-actions button, #aida-launcher, #aida-scroll-bottom {
+      -webkit-tap-highlight-color: transparent;
+    }
 
     /* --- ZONE DE MESSAGES --- */
     #aida-messages {
@@ -218,14 +236,13 @@
       display: flex; flex-direction: column; gap: 12px;
       scroll-behavior: smooth;
       overscroll-behavior: contain;
-      -webkit-overflow-scrolling: touch;
     }
     #aida-messages::-webkit-scrollbar { width: 4px; }
     #aida-messages::-webkit-scrollbar-track { background: transparent; }
     #aida-messages::-webkit-scrollbar-thumb { background: rgb(255 255 255 / .15); border-radius: 99px; }
 
     .aida-msg {
-      max-width: min(72%, 580px); padding: 10px 14px;
+      max-width: min(75%, 580px); padding: 10px 14px;
       font-size: 0.9rem; line-height: 1.55; white-space: pre-wrap;
       overflow-wrap: break-word; word-break: break-word;
       border-radius: 12px;
@@ -419,6 +436,10 @@
       border-top: 1px solid rgb(255 255 255 / .08);
       flex-shrink: 0;
     }
+    /* Safe area supplémentaire pour les appareils avec encoche (notch) */
+    @supports (padding: max(0px, env(safe-area-inset-bottom))) {
+      #aida-form { padding-bottom: max(20px, calc(8px + env(safe-area-inset-bottom))); }
+    }
     #aida-input {
       flex: 1; border: 1px solid rgb(255 255 255 / .15);
       border-radius: 99px; padding: 12px 18px;
@@ -433,6 +454,12 @@
       box-shadow: 0 0 0 3px rgb(47 111 237 / .2);
     }
     #aida-input::placeholder { color: rgb(255 255 255 / .4); font-weight: 500; }
+    /* Empêche le zoom auto sur iOS (uniquement sur mobile grâce au media query) */
+    @media (max-width: 619px) {
+      @supports (-webkit-touch-callout: none) {
+        #aida-input { font-size: 16px; }
+      }
+    }
     #aida-send {
       width: 44px; height: 44px; border-radius: 50%;
       background: var(--aida-accent); border: none; color: white;
@@ -515,7 +542,7 @@
       animation: aida-scroll-bounce 2.5s ease-in-out 3;
     }
 
-    /* --- RESPONSIVE : 5 PALIERS --- */
+    /* --- RESPONSIVE : 5 PALIERS OPTIMISÉS --- */
 
     /* === TRÈS GRANDS ÉCRANS (≥1200px) — centré large === */
     @media (min-width: 1200px) {
@@ -535,21 +562,23 @@
       #aida-invite { padding: 24px 36px 18px; }
       #aida-suggestions { padding: 10px 36px 14px; }
       #aida-form { padding: 14px 36px 18px; }
+      #aida-scroll-bottom { bottom: 76px; }
     }
 
-    /* === TABLETTE (620–959px) — popover modal élégant & fluide === */
+    /* === TABLETTE (620–959px) — immersive + carrousel chips === */
     @media (min-width: 620px) and (max-width: 959px) {
       #aida-overlay {
-        padding: 20px;
+        padding: 12px;
         align-items: center;
         justify-content: center;
       }
       #aida-window {
-        max-width: 680px;
-        height: min(720px, calc(100dvh - 40px));
+        width: 100%;
+        max-width: min(92vw, 780px);
+        height: min(85vh, calc(100dvh - 24px));
         border-radius: 20px;
         margin: auto;
-        transform: translateY(24px) scale(0.96);
+        transform: translateY(20px) scale(0.97);
         transition: transform 0.4s cubic-bezier(0.16, 1, 0.3, 1),
                     opacity 0.35s ease;
       }
@@ -557,15 +586,73 @@
         transform: translateY(0) scale(1);
       }
       #aida-window::after { border-radius: 19px; }
-      #aida-header { padding: 16px 28px; }
-      #aida-messages { padding: 18px 28px; }
-      #aida-messages .aida-msg { max-width: 80%; }
-      #aida-invite { padding: 22px 28px 18px; }
-      #aida-suggestions { padding: 10px 28px 14px; }
-      #aida-form { padding: 14px 28px 18px; }
+      #aida-header { padding: 14px 24px; }
+      #aida-avatar { width: 32px; height: 32px; font-size: 0.88rem; }
+      #aida-bot-name { font-size: 0.9rem; }
+      #aida-header-status { font-size: 0.68rem; }
+      #aida-close { width: 36px; height: 36px; min-width: 36px; min-height: 36px; }
+      #aida-scroll-bottom { bottom: 76px; }
+      #aida-messages { padding: 16px 24px; gap: 10px; }
+      .aida-msg {
+        max-width: min(85%, 520px);
+        font-size: 0.9rem;
+        padding: 10px 14px;
+      }
+      #aida-invite { padding: 20px 24px 16px; }
+      #aida-invite-avatar { width: 52px; height: 52px; font-size: 1.4rem; }
+      #aida-invite h3 { font-size: 1rem; }
+      #aida-invite p { font-size: 0.82rem; }
+      #aida-invite-actions button { padding: 9px 15px; font-size: 0.8rem; min-height: 38px; }
+      /* Carrousel horizontal scrollable comme sur mobile */
+      #aida-suggestions {
+        flex-wrap: nowrap;
+        overflow-x: auto;
+        overflow-y: hidden;
+        scroll-snap-type: x mandatory;
+        scroll-behavior: smooth;
+        padding: 8px 24px 12px;
+        gap: 6px;
+        scrollbar-width: none;
+        -ms-overflow-style: none;
+        mask-image: linear-gradient(to right, transparent 4px, black 20px, black calc(100% - 20px), transparent calc(100% - 4px));
+        -webkit-mask-image: linear-gradient(to right, transparent 4px, black 20px, black calc(100% - 20px), transparent calc(100% - 4px));
+      }
+      #aida-suggestions::-webkit-scrollbar { display: none; }
+      #aida-suggestions-label {
+        width: auto;
+        flex-shrink: 0;
+        align-self: center;
+        margin-right: 4px;
+        margin-bottom: 0;
+      }
+      #aida-suggestions button {
+        flex-shrink: 0;
+        scroll-snap-align: start;
+        padding: 7px 16px;
+        font-size: 0.78rem;
+        min-height: 36px;
+        opacity: 1 !important;
+        transform: none !important;
+        animation: none !important;
+        touch-action: manipulation;
+      }
+      /* Safe area pour le formulaire tablette */
+      #aida-form {
+        padding: 12px 24px 20px;
+        gap: 12px;
+      }
+      @supports (padding: max(0px, env(safe-area-inset-bottom))) {
+        #aida-form { padding-bottom: max(16px, calc(10px + env(safe-area-inset-bottom))); }
+      }
+      #aida-input {
+        padding: 12px 18px;
+        font-size: 16px;
+      }
+      #aida-send { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
+      #aida-send svg { width: 18px; height: 18px; }
     }
 
-    /* === GRAND TÉLÉPHONE (440–619px) — bottom-sheet compact + safe areas === */
+    /* === GRAND TÉLÉPHONE (440–619px) — bottom-sheet ergonomique + safe areas === */
     @media (max-width: 619px) {
       #aida-overlay {
         padding: 0;
@@ -592,25 +679,26 @@
       #aida-avatar { width: 32px; height: 32px; font-size: 0.88rem; }
       #aida-bot-name { font-size: 0.9rem; }
       #aida-header-status { font-size: 0.68rem; }
-      #aida-close { width: 34px; height: 34px; min-width: 34px; min-height: 34px; font-size: 0.9rem; }
+      #aida-close { width: 36px; height: 36px; min-width: 36px; min-height: 36px; font-size: 0.92rem; }
+      #aida-scroll-bottom { bottom: 72px; }
       #aida-messages { padding: 16px 20px; gap: 10px; }
       .aida-msg {
-        max-width: min(82%, 480px);
+        max-width: min(85%, 480px);
         font-size: 0.88rem;
-        padding: 9px 13px;
+        padding: 10px 14px;
+        line-height: 1.55;
         overflow-wrap: break-word; word-break: break-word;
       }
       #aida-invite { padding: 18px 20px 14px; }
       #aida-invite-avatar { width: 48px; height: 48px; font-size: 1.3rem; }
       #aida-invite h3 { font-size: 0.95rem; }
       #aida-invite p { font-size: 0.8rem; }
-      #aida-invite-actions button { padding: 8px 14px; font-size: 0.8rem; min-height: 36px; }
+      #aida-invite-actions button { padding: 8px 14px; font-size: 0.8rem; min-height: 38px; }
       /* Carrousel horizontal scrollable */
       #aida-suggestions {
         flex-wrap: nowrap;
         overflow-x: auto;
         overflow-y: hidden;
-        -webkit-overflow-scrolling: touch;
         scroll-snap-type: x mandatory;
         scroll-behavior: smooth;
         padding: 8px 20px 12px;
@@ -633,22 +721,26 @@
         scroll-snap-align: start;
         padding: 7px 14px;
         font-size: 0.78rem;
-        min-height: 34px;
+        min-height: 36px;
         opacity: 1 !important;
         transform: none !important;
         animation: none !important;
         touch-action: manipulation;
       }
+      /* Safe area pour le formulaire mobile */
       #aida-form {
-        padding: 12px 20px max(16px, calc(10px + env(safe-area-inset-bottom)));
+        padding: 12px 20px 20px;
         gap: 10px;
       }
+      @supports (padding: max(0px, env(safe-area-inset-bottom))) {
+        #aida-form { padding-bottom: max(18px, calc(12px + env(safe-area-inset-bottom))); }
+      }
       #aida-input {
-        padding: 11px 16px;
+        padding: 13px 16px;
         font-size: 16px; /* Empêche le zoom auto Safari iOS */
       }
-      #aida-send { width: 44px; height: 44px; min-width: 44px; min-height: 44px; }
-      #aida-send svg { width: 18px; height: 18px; }
+      #aida-send { width: 46px; height: 46px; min-width: 46px; min-height: 46px; }
+      #aida-send svg { width: 20px; height: 20px; }
     }
 
     /* === PETIT TÉLÉPHONE (<440px) — ultra-compact + carrousel + safe areas === */
@@ -669,12 +761,13 @@
       #aida-avatar { width: 28px; height: 28px; font-size: 0.8rem; }
       #aida-bot-name { font-size: 0.85rem; }
       #aida-header-status { font-size: 0.64rem; }
-      #aida-close { width: 32px; height: 32px; min-width: 32px; min-height: 32px; font-size: 0.82rem; }
+      #aida-close { width: 34px; height: 34px; min-width: 34px; min-height: 34px; font-size: 0.84rem; }
+      #aida-scroll-bottom { bottom: 64px; }
       #aida-messages { padding: 12px 16px; gap: 8px; }
       .aida-msg {
-        max-width: 88%;
+        max-width: 90%;
         font-size: 0.84rem;
-        padding: 8px 12px;
+        padding: 9px 12px;
         line-height: 1.5;
         overflow-wrap: break-word; word-break: break-word;
       }
@@ -683,13 +776,12 @@
       #aida-invite h3 { font-size: 0.9rem; }
       #aida-invite p { font-size: 0.76rem; margin-bottom: 10px; }
       #aida-invite-actions { gap: 6px; }
-      #aida-invite-actions button { padding: 7px 12px; font-size: 0.76rem; min-height: 34px; }
+      #aida-invite-actions button { padding: 7px 12px; font-size: 0.76rem; min-height: 36px; }
       /* Carrousel horizontal */
       #aida-suggestions {
         flex-wrap: nowrap;
         overflow-x: auto;
         overflow-y: hidden;
-        -webkit-overflow-scrolling: touch;
         scroll-snap-type: x mandatory;
         scroll-behavior: smooth;
         padding: 6px 16px 10px;
@@ -712,22 +804,26 @@
         scroll-snap-align: start;
         padding: 6px 12px;
         font-size: 0.74rem;
-        min-height: 32px;
+        min-height: 34px;
         opacity: 1 !important;
         transform: none !important;
         animation: none !important;
         touch-action: manipulation;
       }
+      /* Safe area pour le formulaire petit mobile */
       #aida-form {
-        padding: 10px 16px max(14px, calc(8px + env(safe-area-inset-bottom)));
+        padding: 10px 16px 18px;
         gap: 8px;
       }
+      @supports (padding: max(0px, env(safe-area-inset-bottom))) {
+        #aida-form { padding-bottom: max(16px, calc(10px + env(safe-area-inset-bottom))); }
+      }
       #aida-input {
-        padding: 10px 14px;
+        padding: 12px 14px;
         font-size: 16px; /* Empêche le zoom auto Safari iOS */
       }
-      #aida-send { width: 40px; height: 40px; min-width: 40px; min-height: 40px; }
-      #aida-send svg { width: 16px; height: 16px; }
+      #aida-send { width: 42px; height: 42px; min-width: 42px; min-height: 42px; }
+      #aida-send svg { width: 18px; height: 18px; }
     }
 
     /* --- ACCESSIBILITÉ --- */
@@ -751,8 +847,27 @@
       #aida-suggestions button { background: rgb(255 255 255 / .12); }
       #aida-scroll-bottom { background: rgb(255 255 255 / .18); }
     }
+    /* Performance mobile & tablette : désactive tout backdrop-filter (très coûteux en rendu) */
+    @media (max-width: 959px) {
+      #aida-overlay.aida-open,
+      #aida-window,
+      #aida-launcher-tip,
+      .aida-msg.aida-bot,
+      .aida-msg.aida-typing,
+      #aida-scroll-bottom,
+      #aida-suggestions button {
+        backdrop-filter: none !important;
+        -webkit-backdrop-filter: none !important;
+      }
+      #aida-invite-secondary {
+        backdrop-filter: none;
+        -webkit-backdrop-filter: none;
+      }
+    }
     @media (prefers-reduced-motion: reduce) {
       #aida-overlay, #aida-window { transition: none; }
+      #aida-overlay.aida-open { backdrop-filter: blur(8px); -webkit-backdrop-filter: blur(8px); }
+      #aida-window { transform: none !important; }
       .aida-msg { animation: none; }
       #aida-scroll-bottom { animation: none !important; }
       #aida-scroll-bottom.aida-scroll-visible { animation: none !important; }
@@ -905,6 +1020,43 @@
     });
   }
 
+  // ─── Son de notification (Web Audio API — sans fichier externe) ──────────
+  let _audioCtx = null;
+  function getAudioCtx() {
+    if (!_audioCtx) {
+      try { _audioCtx = new (window.AudioContext || window.webkitAudioContext)(); }
+      catch (_) { return null; }
+    }
+    return _audioCtx;
+  }
+
+  function playNotification() {
+    const ctx = getAudioCtx();
+    if (!ctx) return;
+    // Deux notes douces : do#6 → mi6 (effet "ding" premium)
+    [1108.73, 1318.51].forEach((freq, i) => {
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = "sine";
+      osc.frequency.value = freq;
+      gain.gain.setValueAtTime(0, ctx.currentTime + i * 0.12);
+      gain.gain.linearRampToValueAtTime(0.12, ctx.currentTime + i * 0.12 + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.001, ctx.currentTime + i * 0.12 + 0.25);
+      osc.connect(gain).connect(ctx.destination);
+      osc.start(ctx.currentTime + i * 0.12);
+      osc.stop(ctx.currentTime + i * 0.12 + 0.25);
+    });
+  }
+
+  // ─── Haptique (vibration mobile) ────────────────────────────────────────
+  function vibrate(ms) {
+    try {
+      if (window.navigator && window.navigator.vibrate) {
+        window.navigator.vibrate(ms);
+      }
+    } catch (_) { /* silencieux */ }
+  }
+
   // ─── Utilitaires ─────────────────────────────────────────────────────────
   let pendingScrollCount = 0;
 
@@ -1047,6 +1199,7 @@
   function openChat() {
     isOpen = true;
     overlay.classList.add("aida-open");
+    launcher.classList.add("aida-hidden");
     document.body.style.overflow = "hidden";
 
     // Focus sur l'input après l'animation d'ouverture
@@ -1066,11 +1219,13 @@
   function closeChat() {
     isOpen = false;
     overlay.classList.remove("aida-open");
+    launcher.classList.remove("aida-hidden");
     document.body.style.overflow = "";
     inputEl.blur();
   }
 
   launcher.addEventListener("click", () => {
+    vibrate(10);
     if (!isOpen) openChat(); else closeChat();
   });
 
@@ -1098,6 +1253,12 @@
     addMessage(text, "user");
     inputEl.value = "";
     sendBtn.disabled = true;
+    vibrate(15);
+    /* Éveille le contexte audio pendant le geste utilisateur (nécessaire pour iOS Safari) */
+    (function ensureAudio() {
+      const ctx = getAudioCtx();
+      if (ctx && ctx.state === "suspended") ctx.resume();
+    })();
 
     const typingEl = addMessage("...", "typing");
 
@@ -1112,6 +1273,7 @@
 
       if (res.ok && data.reply) {
         addMessage(data.reply, "bot");
+        playNotification();
         setTimeout(showSuggestionChips, 600);
       } else {
         addMessage(data.error || "Une erreur est survenue. Veuillez réessayer.", "error");
