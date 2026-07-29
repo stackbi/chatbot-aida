@@ -967,7 +967,9 @@
 
 <script>
   // ─── JavaScript inchangé (fonctionnalité préservée) ─────────────────────
-  let adminPassword = sessionStorage.getItem('adminPassword') || '';
+  // Utilisation de localStorage pour une persistance réelle entre les sessions
+  // (sessionStorage est effacé à la fermeture de l'onglet, pas localStorage)
+  let adminPassword = localStorage.getItem('adminPassword') || '';
 
   const loginScreen = document.getElementById('login-screen');
   const dashboard = document.getElementById('dashboard');
@@ -982,7 +984,7 @@
       }
     });
     if (res.status === 401) {
-      sessionStorage.removeItem('adminPassword');
+      localStorage.removeItem('adminPassword');
       showLogin('Session expirée ou non autorisée, reconnecte-toi.');
       throw new Error('unauthorized');
     }
@@ -1016,7 +1018,7 @@
       });
       if (res.ok) {
         adminPassword = password;
-        sessionStorage.setItem('adminPassword', password);
+        localStorage.setItem('adminPassword', password);
         showDashboard();
       } else if (res.status === 429) {
         document.getElementById('login-error').textContent = 'Trop de tentatives. Réessaie dans 15 minutes.';
@@ -1582,7 +1584,7 @@
 
   // --- Déconnexion ---
   function logout() {
-    sessionStorage.removeItem('adminPassword');
+    localStorage.removeItem('adminPassword');
     adminPassword = '';
     showLogin('Vous êtes déconnecté.');
   }

@@ -93,6 +93,7 @@ async function apiCall({ baseUrl, apiKey, model, messages, maxTokens, extraHeade
       body: JSON.stringify({
         model,
         max_tokens: maxTokens || 800,
+        temperature: 0.3,
         messages
       })
     });
@@ -134,6 +135,7 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
       body: JSON.stringify({
         model,
         max_tokens: maxTokens || 800,
+        temperature: 0.3,
         messages,
         stream: true
       })
@@ -188,29 +190,35 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
 }
 
 /**
- * Retourne la liste ordonnée des providers à essayer (OpenRouter → fallbacks externes)
- * en fonction des clés configurées dans les settings.
+ * Retourne la liste ordonnée des providers à essayer.
+ * L'ordre dynamique place le provider ayant une clé API en premier :
+ *   - Si une clé OpenRouter est configurée → OpenRouter en tête
+ *   - Sinon → le premier provider non-OpenRouter configuré devient le primary
+ * Cela permet d'utiliser Groq, SiliconFlow, OpenAI ou une API locale
+ * comme fournisseur principal, sans dépendre d'OpenRouter.
  */
 function getFallbackProviders(settings) {
   const providers = [];
   const configuredModel = settings.model || "openrouter/free";
 
-  // OpenRouter : modèle configuré + fallback openrouter/free
-  const orModels = [configuredModel];
-  for (const fb of FALLBACK_MODELS) {
-    if (fb !== configuredModel) orModels.push(fb);
-  }
-  for (const m of orModels) {
-    providers.push({
-      name: m,
-      model: m,
-      baseUrl: "https://openrouter.ai/api/v1",
-      apiKey: settings.apiKey,
-      extraHeaders: OR_HEADERS
-    });
+  // 1) OpenRouter : seulement si une clé est présente
+  if (settings.apiKey) {
+    const orModels = [configuredModel];
+    for (const fb of FALLBACK_MODELS) {
+      if (fb !== configuredModel) orModels.push(fb);
+    }
+    for (const m of orModels) {
+      providers.push({
+        name: m,
+        model: m,
+        baseUrl: "https://openrouter.ai/api/v1",
+        apiKey: settings.apiKey,
+        extraHeaders: OR_HEADERS
+      });
+    }
   }
 
-  // Fallbacks externes
+  // 2) Groq (gratuit, fallback #1 ou primary si pas d'OpenRouter)
   if (settings.groqApiKey) {
     providers.push({
       name: "Groq",
@@ -219,6 +227,8 @@ function getFallbackProviders(settings) {
       apiKey: settings.groqApiKey
     });
   }
+
+  // 3) SiliconFlow (gratuit, fallback #2)
   if (settings.siliconflowApiKey) {
     providers.push({
       name: "SiliconFlow",
@@ -227,6 +237,8 @@ function getFallbackProviders(settings) {
       apiKey: settings.siliconflowApiKey
     });
   }
+
+  // 4) API personnalisée (fallback #3)
   if (settings.customApiUrl) {
     providers.push({
       name: "API locale",
@@ -235,6 +247,8 @@ function getFallbackProviders(settings) {
       apiKey: settings.customApiKey || ""
     });
   }
+
+  // 5) OpenAI (fallback #4, payant)
   if (settings.openaiApiKey) {
     providers.push({
       name: "OpenAI",
@@ -421,10 +435,10 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
   if (accentColor !== undefined) patch.accentColor = accentColor;
   if (accentColorDark !== undefined) patch.accentColorDark = accentColorDark;
   if (fontFamily !== undefined) patch.fontFamily = fontFamily;
-  // customApiUrl et customApiModel : seulement si une valeur est fournie
-  // (évite d'écraser avec une chaîne vide quand l'utilisateur sauvegarde d'autres champs)
-  if (customApiUrl) patch.customApiUrl = customApiUrl;
-  if (customApiModel) patch.customApiModel = customApiModel;
+  // customApiUrl et customApiModel : mise à jour uniquement si explicitement fournis
+  // Permet de vider le champ ("") pour désactiver l'API personnalisée
+  if (customApiUrl !== undefined) patch.customApiUrl = customApiUrl;
+  if (customApiModel !== undefined) patch.customApiModel = customApiModel;
 
   // fontFamily : validation stricte pour éviter l'injection CSS
   // Seuls les caractères alphanumériques, espaces, tirets et virgules sont autorisés
@@ -464,16 +478,24 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
   try {
     const { apiKey, model } = req.body;
 
-    // Utilise la clé fournie ou celle enregistrée
-    const testKey = apiKey || getSettings().apiKey;
-    const testModel = model || getSettings().model || "openrouter/free";
+    // Récupère les settings
+    const settings = getSettings();
+    
+    // Utilise la clé fournie ou celle enregistrée (pour chaque provider)
+    const testOpenRouterKey = apiKey || settings.apiKey;
+    const testModel = model || settings.model || "openrouter/free";
 
-    if (!testKey) {
-      return res.json({ ok: false, error: "Aucune clé API fournie." });
+    // Vérifie qu'au moins une clé est fournie (OpenRouter ou un fallback)
+    const hasAnyKey = testOpenRouterKey ||
+      (req.body.groqApiKey || settings.groqApiKey) ||
+      (req.body.siliconflowApiKey || settings.siliconflowApiKey) ||
+      (req.body.openaiApiKey || settings.openaiApiKey) ||
+      (req.body.customApiKey || settings.customApiKey);
+
+    if (!hasAnyKey) {
+      return res.json({ ok: false, error: "Aucune clé API fournie. Configure au moins un fournisseur (OpenRouter, Groq, OpenAI...)." });
     }
 
-    // Récupère les clés de fallback (saisie ou enregistrée)
-    const settings = getSettings();
     const openAiKey = req.body.openaiApiKey || settings.openaiApiKey;
     const groqKey = req.body.groqApiKey || settings.groqApiKey;
     const siliconflowKey = req.body.siliconflowApiKey || settings.siliconflowApiKey;
@@ -482,7 +504,7 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
     const customModel = req.body.customApiModel || settings.customApiModel || "llama3.1-8b";
 
     const result = await callOpenRouterWithFallback({
-      apiKey: testKey,
+      apiKey: testOpenRouterKey,
       model: testModel,
       messages: [
         { role: "user", content: "Test de connexion — réponds uniquement \"OK\"." }
@@ -520,6 +542,11 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
           (typeof rawMeta === "string" ? rawMeta : null);
         detail = rawMsg || errJson.error?.message || errJson.error?.code || errText;
         fullDetail = rawMsg ? errJson.error?.message + " : " + rawMsg : detail;
+        // Pour les erreurs 401 (clé manquante ou invalide), on fournit un message clair
+        if (result.status === 401) {
+          detail = "Clé API invalide ou manquante pour ce fournisseur. Vérifie la configuration.";
+          fullDetail = errText;
+        }
       } catch {
         detail = errText;
         fullDetail = errText;
@@ -633,7 +660,8 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     const effectiveSessionId = sessionId || "anon-" + crypto.randomUUID();
 
     const settings = getSettings();
-    if (!settings.apiKey) {
+    // Vérifie qu'au moins UNE clé API est configurée (OpenRouter ou fallbacks)
+    if (!settings.apiKey && !settings.groqApiKey && !settings.siliconflowApiKey && !settings.customApiUrl && !settings.openaiApiKey) {
       return res.status(400).json({
         error: "Aucune clé API configurée. Va dans /admin pour en ajouter une."
       });
@@ -742,7 +770,8 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     const effectiveSessionId = sessionId || "anon-" + crypto.randomUUID();
     const settings = getSettings();
 
-    if (!settings.apiKey) {
+    // Vérifie qu'au moins UNE clé API est configurée
+    if (!settings.apiKey && !settings.groqApiKey && !settings.siliconflowApiKey && !settings.customApiUrl && !settings.openaiApiKey) {
       res.write(`data: ${JSON.stringify({ error: "Aucune clé API configurée" })}\n\n`);
       return res.end();
     }

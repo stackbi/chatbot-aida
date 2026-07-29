@@ -1111,6 +1111,38 @@
     } catch (_) { /* silencieux */ }
   }
 
+  // ─── Nettoie le markdown partiel pendant le streaming ────────────────
+  // Évite d'afficher les balises markdown non fermées (ex: ** en cours de frappe)
+  function sanitizePartialMarkdown(text) {
+    if (!text) return "";
+    // Supprime les ** non fermés (paires incomplètes)
+    const stars = (text.match(/\*\*/g) || []).length;
+    if (stars % 2 !== 0) {
+      text = text.replace(/\*\*[^*]*$/, "");
+    }
+    // Supprime les * non fermés (simples, mais attention à ne pas toucher aux ** déjà traités)
+    const singleStars = (text.match(/(?<!\*)\*(?!\*)/g) || []).length;
+    if (singleStars % 2 !== 0) {
+      text = text.replace(/(?<!\*)\*(?!\*)[^*]*$/, "");
+    }
+    // Supprime les __ non fermés
+    const under = (text.match(/__/g) || []).length;
+    if (under % 2 !== 0) {
+      text = text.replace(/__[^_]*$/, "");
+    }
+    // Supprime les backticks non fermés (code inline)
+    const ticks = (text.match(/`/g) || []).length;
+    if (ticks % 2 !== 0) {
+      text = text.replace(/`[^`]*$/, "");
+    }
+    // Supprime les ``` non fermés (blocs de code)
+    const codeFences = (text.match(/```/g) || []).length;
+    if (codeFences % 2 !== 0) {
+      text = text.replace(/```[\s\S]*$/, "");
+    }
+    return text;
+  }
+
   // ─── Formateur markdown → HTML ───────────────────────────────────────────
   function formatMessage(text) {
     if (!text) return "";
@@ -1415,7 +1447,7 @@
                 botMsgEl = addMessage("", "bot");
               }
               fullContent += data.token;
-              botMsgEl.innerHTML = formatMessage(fullContent);
+              botMsgEl.innerHTML = formatMessage(sanitizePartialMarkdown(fullContent));
               if (isNearBottom()) {
                 messagesEl.scrollTop = messagesEl.scrollHeight;
               }
@@ -1489,7 +1521,7 @@
                     botMsgEl = addMessage("", "bot");
                   }
                   content += d.token;
-                  botMsgEl.innerHTML = formatMessage(content);
+                  botMsgEl.innerHTML = formatMessage(sanitizePartialMarkdown(content));
                   if (isNearBottom()) messagesEl.scrollTop = messagesEl.scrollHeight;
                 }
                 if (d.error) {
