@@ -90,6 +90,36 @@ function filterAIContent(text) {
 }
 
 /**
+ * Normalise les espaces dans la réponse de l'IA.
+ * Corrige les mots collés entre eux et les problèmes de ponctuation.
+ * S'adapte au français (lettres accentuées comprises).
+ */
+function normalizeSpacing(text) {
+  if (!text) return "";
+
+  // Lettres latines (incluant les accents français)
+  const letters = "A-Za-zÀ-ÖØ-öø-ÿéèêëàâäùûüôöîïçÉÈÊËÀÂÄÙÛÜÔÖÎÏÇ";
+
+  return text
+    // 1) Normalise TOUS les types d'espaces Unicode vers U+0020
+    // (non-breaking space, narrow no-break space, espace insécable fine, etc.)
+    .replace(/[\u00A0\u202F\u2000-\u200A\u200B\u2060]/g, " ")
+    // 2) Espace APRÈS . ! ? suivi d'une lettre (nouvelle phrase)
+    .replace(new RegExp(`([.!?])([${letters}])`, "g"), "$1 $2")
+    // 3) Espace APRÈS , ; : suivi d'une lettre
+    .replace(new RegExp(`([,;:])([${letters}])`, "g"), "$1 $2")
+    // 4) Espace APRÈS « " ( suivi d'une lettre (guillemet/parenthèse ouvrant)
+    .replace(new RegExp(`([«"(])([${letters}])`, "g"), "$1 $2")
+    // 5) Espace AVANT » ) " fermant après une lettre ou ponctuation
+    .replace(new RegExp(`([${letters}\!\?\.,;:])([»\)"])`, "g"), "$1 $2")
+    // 6) Supprime les espaces multiples
+    .replace(/[ ]{2,}/g, " ")
+    // 7) Normalise les retours à la ligne
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
+
+/**
  * Fait un appel API OpenAI-compatible vers une URL donnée.
  * Retourne { ok, data, modelUsed, errText, status }.
  */
@@ -188,8 +218,10 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
             const token = filterAIContent(rawToken);
             if (token) {
               fullContent += rawToken; // conserve l'original pour fullContent (filtré à la fin)
+              // Normalise l'espacement de chaque token SSE
+              const spacedToken = normalizeSpacing(token);
               // Écrit directement dans la réponse SSE
-              res.write(`data: ${JSON.stringify({ token })}\n\n`);
+              res.write(`data: ${JSON.stringify({ token: spacedToken })}\n\n`);
             }
           }
         } catch { /* ignorer les lignes mal formées */ }
@@ -234,9 +266,7 @@ function getFallbackProviders(settings) {
         extraHeaders: OR_HEADERS
       });
     }
-  }
-
-  // 2) Groq (gratuit, fallback #1 ou primary si pas d'OpenRouter)
+  }    // 2) Groq (gratuit, fallback #1 ou primary si pas d'OpenRouter) — modèle fiable
   if (settings.groqApiKey) {
     providers.push({
       name: "Groq",
@@ -767,6 +797,7 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     const rawReply = result.data.choices?.[0]?.message?.content || "Désolé, je n'ai pas compris.";
     let reply = filterAIContent(rawReply);
     reply = await correctText(reply);
+    reply = normalizeSpacing(reply);
 
     // Sauvegarde de la conversation uniquement en cas de succès de l'appel
     const updatedHistory = [...history, { role: "assistant", content: reply }];
@@ -875,7 +906,7 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
 
     // Sauvegarde de la conversation
     const rawReply = streamResult.fullContent || ""; // déjà filtré par apiCallStream
-    const fullReply = await correctText(rawReply);
+    const fullReply = normalizeSpacing(await correctText(rawReply));
     const updatedHistory = [...history, { role: "assistant", content: fullReply }];
     conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
 
