@@ -963,6 +963,57 @@ app.get("/api/widget-suggestions", widgetCors, (req, res) => {
   res.json({ suggestions: suggestionsCache });
 });
 
+/**
+ * Analyse le contenu textuel d'un document pour en déduire le thème
+ * et générer une suggestion de question pertinente.
+ * N'utilise JAMAIS le titre du document.
+ */
+function guessSuggestionFromContent(content) {
+  if (!content || content.length < 30) return null;
+
+  const c = content.toLowerCase();
+
+  // Comptage de mots-clés thématiques dans le contenu
+  const signals = {
+    contact:    (c.match(/t[eé]l[ée]phone|email|@|adresse|contacter|joindre|horaires?|ouverture|trouver|localisation|si[èe]ge|appeler|t[eé]l\b/gi) || []).length,
+    pricing:    (c.match(/prix|tarif|co[uû]t|forfait|€|euros|dollars|gratuit|abonnement|factur|paye?r|00[0-9]|€[0-9]|[0-9]€/gi) || []).length,
+    service:    (c.match(/service|prestation|offre|accompagnement|conseil|formation|diagnostic|audit|solution/gi) || []).length,
+    delivery:   (c.match(/livraison|exp[ée]dition|d[ée]lai|transport|colis|commande|envoi|r[ée]ception/gi) || []).length,
+    returns:    (c.match(/retour|remboursement|[ée]change|satisfait|r[ée]tractation|annulation/gi) || []).length,
+    guarantee:  (c.match(/garantie|SAV|apr[èe]s-vente|service client|assistance|support/gi) || []).length,
+    product:    (c.match(/produit|article|r[ée]f[ée]rence|catalogue|gamme|mod[èe]le|marque|collection/gi) || []).length,
+    company:    (c.match(/notre? entreprise|notre? soci[ée]t[ée]|qui sommes|[àa] propos|pr[ée]sentation|expertise|métier|activit[ée]s?/gi) || []).length,
+    faq:        (c.match(/question|r[ée]ponse|FAQ|f[ée]quentes/gi) || []).length,
+  };
+
+  // Trouve le thème dominant
+  let maxCount = 0;
+  let bestTheme = null;
+  for (const [theme, count] of Object.entries(signals)) {
+    if (count > maxCount) {
+      maxCount = count;
+      bestTheme = theme;
+    }
+  }
+
+  // Seuil minimum : au moins 2 occurrences du thème dominant
+  if (maxCount < 2) return null;
+
+  const suggestions = {
+    contact:   "Comment puis-je vous contacter ?",
+    pricing:   "Quels sont vos tarifs ?",
+    service:   "Quels sont vos services ?",
+    delivery:  "Quels sont les délais de livraison ?",
+    returns:   "Comment faire un retour ?",
+    guarantee: "Quelle est votre garantie ?",
+    product:   "Quels produits proposez-vous ?",
+    company:   "Pouvez-vous me présenter votre activité ?",
+    faq:       "Questions fréquentes"
+  };
+
+  return suggestions[bestTheme] || null;
+}
+
 function generateSuggestions(documents) {
   const defaults = [
     "Quels sont vos services ?",
@@ -977,9 +1028,7 @@ function generateSuggestions(documents) {
   const pushIfNew = (item) => { if (!docSuggestions.includes(item)) docSuggestions.push(item); };
 
   for (const doc of documents) {
-    const title = (doc.title || "").trim();
     const content = doc.content || "";
-    const titleLower = title.toLowerCase();
 
     // Extrait les questions du contenu (naturelles, jamais un nom de fichier)
     const questionLines = content.split("\n")
@@ -990,31 +1039,10 @@ function generateSuggestions(documents) {
       if (docSuggestions.length >= 8) break;
     }
 
-    // Suggestions contextuelles sans jamais exposer le nom du fichier
-    if (/faq|question/.test(titleLower) && !/questions?\s+fréquentes/i.test(content)) {
-      pushIfNew("Questions fréquentes sur nos services");
-    } else if (/contact/.test(titleLower)) {
-      pushIfNew("Comment vous contacter ?");
-    } else if (/prix|tarif|forfait/.test(titleLower)) {
-      pushIfNew("Quels sont vos tarifs ?");
-    } else if (/service|offre/.test(titleLower)) {
-      pushIfNew("Quels sont vos services ?");
-    } else if (/livraison|expédition|shipping/.test(titleLower)) {
-      pushIfNew("Quels sont les délais de livraison ?");
-    } else if (/retour|remboursement/.test(titleLower)) {
-      pushIfNew("Comment faire un retour ?");
-    } else if (/garantie/.test(titleLower)) {
-      pushIfNew("Quelle est votre garantie ?");
-    } else if (/à propos|about|presentation|présentation/.test(titleLower)) {
-      pushIfNew("Pouvez-vous me présenter votre activité ?");
-    } else if (/produit|product|catalogue/.test(titleLower)) {
-      pushIfNew("Quels produits proposez-vous ?");
-    } else {
-      // Aucun mot-clé détecté → suggestion subtile depuis le contenu
-      if (content.length > 80) {
-        pushIfNew("Que contient ce document ?");
-        if (docSuggestions.length < 4) pushIfNew("Quels sont les points importants ?");
-      }
+    // Suggestion basée sur l'analyse du contenu uniquement (pas du titre)
+    const guessed = guessSuggestionFromContent(content);
+    if (guessed) {
+      pushIfNew(guessed);
     }
 
     if (docSuggestions.length >= 6) break;
