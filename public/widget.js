@@ -1367,9 +1367,10 @@
   });
 
   // Fermeture avec la touche Echap
-  document.addEventListener("keydown", (e) => {
+  function onKeyDown(e) {
     if (e.key === "Escape" && isOpen) closeChat();
-  });
+  }
+  document.addEventListener("keydown", onKeyDown);
 
   // ─── Envoi de message ────────────────────────────────────────────────────
   // ─── Envoi avec streaming SSE pour une expérience temps réel ────────────
@@ -1614,4 +1615,42 @@
       }
     });
   }
+
+  // ─── Fonction destroy (nettoyage complet pour les SPA) ───────────────
+  function destroy() {
+    // Ferme le chat si ouvert
+    if (isOpen) closeChat();
+
+    // Retire l'écouteur global keydown
+    document.removeEventListener("keydown", onKeyDown);
+
+    // Ferme l'AudioContext s'il existe
+    if (_audioCtx && _audioCtx.state !== "closed") {
+      _audioCtx.close().catch(() => {});
+    }
+
+    // Supprime les éléments du DOM
+    const elements = [launcher, launcherTip, overlay, style];
+    for (const el of elements) {
+      if (el && el.parentNode) el.parentNode.removeChild(el);
+    }
+
+    // Nettoie les variables CSS personnalisées
+    document.documentElement.style.removeProperty("--aida-accent");
+    document.documentElement.style.removeProperty("--aida-accent-dark");
+    document.documentElement.style.removeProperty("--aida-font-family");
+
+    // Réinitialise le flag de chargement
+    window.__aidaWidgetLoaded = false;
+
+    // Supprime les références exposées
+    delete window.__aidaDestroy;
+
+    console.log("🧹 Widget Aïda détruit avec succès.");
+  }
+
+  // Expose destroy() pour nettoyage manuel depuis les SPA
+  window.__aidaDestroy = destroy;
+  currentScript.__aidaDestroy = destroy;
+
 })();

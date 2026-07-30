@@ -25,7 +25,8 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
-app.use(express.json({ limit: "10mb" }));
+app.use(express.json({ limit: "20mb" }));
+// 20 Mo pour supporter le surcoût base64 des uploads PDF (10 Mo fichier → ~13,3 Mo base64)
 
 // ─── Headers de sécurité HTTP ──────────────────────────────────────────
 // CSP configuré pour permettre l'embedding du widget sur n'importe quel site
@@ -177,8 +178,7 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
       }
     }
 
-    // Envoie le signal de fin avec le contenu complet + modèle utilisé
-    res.write(`data: ${JSON.stringify({ done: true, fullContent })}\n\n`);
+    // Le signal de fin (done) est envoyé par la route appelante avec les métadonnées
     return { ok: true, fullContent };
   } catch (err) {
     if (err.name === "AbortError") {
@@ -599,11 +599,48 @@ app.post("/api/admin/documents/upload", requireAdmin, async (req, res) => {
       return res.status(400).json({ error: "Nom de fichier ou données manquants" });
     }
 
+    // Limite de taille : 10 Mo après décodage base64
+    const MAX_SIZE = 10 * 1024 * 1024; // 10 Mo
     const base64Content = base64Data.includes("base64,")
       ? base64Data.split("base64,")[1]
       : base64Data;
 
+    // Estimation de la taille avant décodage (base64 → binaire ≈ ratio 4:3)
+    const decodedSize = Math.ceil(base64Content.length * 0.75);
+    if (decodedSize > MAX_SIZE) {
+      return res.status(400).json({
+        error: `Le fichier est trop volumineux (max ${(MAX_SIZE / 1024 / 1024).toFixed(0)} Mo).`
+      });
+    }
+
+    // ── Validation du type MIME ────────────────────────────────────────
+    // 1) Vérifie le préfixe data URL s'il est présent
+    const mimeMatch = base64Data.match(/^data:([^;]+);base64,/);
+    if (mimeMatch) {
+      const mime = mimeMatch[1].toLowerCase();
+      if (mime !== "application/pdf") {
+        return res.status(400).json({
+          error: `Type de fichier non supporté : "${mime}". Seuls les PDF sont acceptés.`
+        });
+      }
+    }
+
+    // 2) Vérifie le nom du fichier
+    if (!filename.toLowerCase().endsWith(".pdf")) {
+      return res.status(400).json({
+        error: "Seuls les fichiers PDF sont acceptés (extension .pdf)."
+      });
+    }
+
     const buffer = Buffer.from(base64Content, "base64");
+
+    // 3) Vérifie les magic bytes du PDF (%PDF en début de fichier)
+    const pdfHeader = buffer.slice(0, 5).toString("ascii");
+    if (pdfHeader !== "%PDF-") {
+      return res.status(400).json({
+        error: "Le fichier n'est pas un PDF valide (signature %PDF introuvable)."
+      });
+    }
 
     const parser = new PDFParse({
       data: buffer,
@@ -681,10 +718,10 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     }
     const contextBlock = buildContextBlock(relevantChunks);
 
-    // 2. Historique de conversation (copie pour éviter la corruption en cas d'échec)
-    const storedSession = conversations.get(effectiveSessionId) || { history: [], lastActivity: Date.now() };
-    storedSession.lastActivity = Date.now();
-    const history = [...storedSession.history, { role: "user", content: message }];
+    // 2. Historique (copie pour éviter toute mutation de l'objet en cache)
+    const previous = conversations.get(effectiveSessionId);
+    const previousHistory = previous ? previous.history : [];
+    const history = [...previousHistory, { role: "user", content: message }];
 
     // 3. Appel à l'API OpenRouter (compatible OpenAI)
     const messages = [
@@ -756,14 +793,17 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
   res.setHeader("X-Accel-Buffering", "no");
   res.flushHeaders();
 
+  let responseEnded = false;
   try {
     const { message, sessionId } = req.body;
     if (!message || typeof message !== "string") {
       res.write(`data: ${JSON.stringify({ error: "Message manquant" })}\n\n`);
+      responseEnded = true;
       return res.end();
     }
     if (message.length > 4000) {
       res.write(`data: ${JSON.stringify({ error: "Message trop long (maximum 4000 caractères)." })}\n\n`);
+      responseEnded = true;
       return res.end();
     }
 
@@ -773,11 +813,12 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     // Vérifie qu'au moins UNE clé API est configurée
     if (!settings.apiKey && !settings.groqApiKey && !settings.siliconflowApiKey && !settings.customApiUrl && !settings.openaiApiKey) {
       res.write(`data: ${JSON.stringify({ error: "Aucune clé API configurée" })}\n\n`);
+      responseEnded = true;
       return res.end();
     }
 
     // 1. Contexte RAG (avec cache intégré)
-    const { chunkEntries } = getRagContext();
+    const { documents, chunkEntries } = getRagContext();
     const queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
       ? await generateEmbedding(message).catch(() => null)
       : null;
@@ -787,15 +828,14 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
       relevantChunks = findSimilarChunks(queryEmbedding, chunkEntries, 4);
     }
     if (relevantChunks.length === 0) {
-      const docs = ragCache.documents || getDocuments();
-      relevantChunks = retrieveRelevantChunksSync(docs, message, 4);
+      relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
     }
     const contextBlock = buildContextBlock(relevantChunks);
 
-    // 2. Historique
-    const storedSession = conversations.get(effectiveSessionId) || { history: [], lastActivity: Date.now() };
-    storedSession.lastActivity = Date.now();
-    const history = [...storedSession.history, { role: "user", content: message }];
+    // 2. Historique (copie pour éviter toute mutation de l'objet en cache)
+    const previous = conversations.get(effectiveSessionId);
+    const previousHistory = previous ? previous.history : [];
+    const history = [...previousHistory, { role: "user", content: message }];
 
     // 3. Messages pour l'API
     const messages = [
@@ -825,6 +865,7 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
         errMsg = "Erreur de connexion aux fournisseurs IA. Vérifie ta configuration dans /admin.";
       }
       res.write(`data: ${JSON.stringify({ error: errMsg })}\n\n`);
+      responseEnded = true;
       return res.end();
     }
 
@@ -834,14 +875,17 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
 
     // Signal de fin avec métadonnées
-    res.write(`data: ${JSON.stringify({ done: true, fullContent, modelUsed: streamResult.modelUsed, fallbackUsed: streamResult.fallbackUsed, sourcesUsed: relevantChunks.map(r => r.title) })}\n\n`);
+    res.write(`data: ${JSON.stringify({ done: true, fullContent: fullReply, modelUsed: streamResult.modelUsed, fallbackUsed: streamResult.fallbackUsed, sourcesUsed: relevantChunks.map(r => r.title) })}\n\n`);
+    responseEnded = true;
     res.end();
   } catch (err) {
     console.error("Erreur streaming:", err);
-    try {
-      res.write(`data: ${JSON.stringify({ error: "Erreur serveur" })}\n\n`);
-      res.end();
-    } catch { /* already closed */ }
+    if (!responseEnded) {
+      try {
+        res.write(`data: ${JSON.stringify({ error: "Erreur serveur" })}\n\n`);
+        res.end();
+      } catch { /* already closed */ }
+    }
   }
 });
 
