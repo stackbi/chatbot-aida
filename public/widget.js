@@ -1146,42 +1146,44 @@
   // ─── Formateur markdown → HTML ───────────────────────────────────────────
   function formatMessage(text) {
     if (!text) return "";
+
     // Échapper le HTML pour éviter les injections XSS
     let html = text
       .replace(/&/g, "&amp;")
       .replace(/</g, "&lt;")
       .replace(/>/g, "&gt;");
 
-    // Convertir les sauts de ligne en <br>
+    // ─── Ordre des traitements important ────────────────────────────────────
+    // 1) Blocs de code (```) AVANT la conversion des \n pour préserver le contenu
+    //    Note : le texte est déjà HTML-échappé → pas de double échappement
+    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, (_, lang, code) => {
+      return `<pre><code>${code.trim()}</code></pre>`;
+    });
+
+    // 2) Code inline (`) AVANT le gras/italique pour éviter la sur-formatage
+    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+
+    // 3) Listes (avant conversion des \n, en utilisant les ancres ligne par ligne)
+    html = html.replace(/^(\s*)[-*]\s+(.+)$/gm, '$1• $2');
+    html = html.replace(/^(\s*)(\d+)\.\s+(.+)$/gm, '$1<span class="aida-list-num">$2.</span> $3');
+
+    // 4) Sauts de ligne → <br>
     html = html.replace(/\n/g, "<br>");
 
-    // Convertir **gras** (en priorité sur *italic*)
-    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
-
-    // Convertir *italic*
-    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
-
-    // Convertir __souligné__
-    html = html.replace(/__(.+?)__/g, "<u>$1</u>");
-
-    // Convertir les listes non-ordonnées (lignes commençant par - ou *)
-    // On remplace d'abord les <br>- ou <br>* en <br>• pour marquer les items
-    html = html.replace(/(<br>|^)[\s]*[-*]\s+/gm, "$1• ");
-
-    // Convertir les listes ordonnées (lignes commençant par 1. 2. etc.)
-    html = html.replace(/(<br>|^)[\s]*(\d+)\.\s+/gm, "$1<span class=\"aida-list-num\">$2.</span> ");
-
-    // Convertir les URLs en liens cliquables
+    // 5) URLs en liens cliquables
     html = html.replace(
-      /(https?:\/\/[^\s<]+)/g,
+      /(https?:\/\/[^\s<"'>]+)/g,
       '<a href="$1" target="_blank" rel="noopener noreferrer">$1</a>'
     );
 
-    // Convertir le code inline (entre backticks)
-    html = html.replace(/`([^`]+)`/g, "<code>$1</code>");
+    // 6) **gras** (en priorité sur *italic*)
+    html = html.replace(/\*\*(.+?)\*\*/g, "<strong>$1</strong>");
 
-    // Convertir les blocs de code (```...```)
-    html = html.replace(/```(\w*)\n?([\s\S]*?)```/g, '<pre><code>$2</code></pre>');
+    // 7) *italic*
+    html = html.replace(/\*(.+?)\*/g, "<em>$1</em>");
+
+    // 8) __souligné__
+    html = html.replace(/__(.+?)__/g, "<u>$1</u>");
 
     return html;
   }

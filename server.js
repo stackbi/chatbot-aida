@@ -16,6 +16,7 @@ import {
 } from "./lib/store.js";
 import { retrieveRelevantChunksSync, buildContextBlock } from "./lib/retrieval.js";
 import { ensureEmbeddingModel, generateEmbedding, findSimilarChunks } from "./lib/embedding.js";
+import { correctText } from "./lib/spellcheck.js";
 
 const require = createRequire(import.meta.url);
 const { PDFParse } = require("pdf-parse");
@@ -764,7 +765,8 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     }
 
     const rawReply = result.data.choices?.[0]?.message?.content || "Désolé, je n'ai pas compris.";
-    const reply = filterAIContent(rawReply);
+    let reply = filterAIContent(rawReply);
+    reply = await correctText(reply);
 
     // Sauvegarde de la conversation uniquement en cas de succès de l'appel
     const updatedHistory = [...history, { role: "assistant", content: reply }];
@@ -872,7 +874,8 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     }
 
     // Sauvegarde de la conversation
-    const fullReply = streamResult.fullContent || ""; // déjà filtré par apiCallStream
+    const rawReply = streamResult.fullContent || ""; // déjà filtré par apiCallStream
+    const fullReply = await correctText(rawReply);
     const updatedHistory = [...history, { role: "assistant", content: fullReply }];
     conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
 
