@@ -14,7 +14,7 @@ import {
   addDocument,
   deleteDocument
 } from "./lib/store.js";
-import { retrieveRelevantChunks, retrieveRelevantChunksSync, buildContextBlock } from "./lib/retrieval.js";
+import { retrieveRelevantChunksSync, buildContextBlock } from "./lib/retrieval.js";
 import { ensureEmbeddingModel, generateEmbedding, findSimilarChunks } from "./lib/embedding.js";
 
 const require = createRequire(import.meta.url);
@@ -73,6 +73,20 @@ const OR_HEADERS = {
 
 // Liste des modèles de fallback en cas de rate limit (429)
 const FALLBACK_MODELS = ["openrouter/free"];
+
+/**
+ * Filtre les annotations de sécurité des fournisseurs IA
+ * qui peuvent fuiter dans le contenu de la réponse.
+ * Patterns connus : "User Safety: safe", "Response Safety: safe"
+ */
+function filterAIContent(text) {
+  if (!text) return "";
+  return text
+    .replace(/User Safety:\s*safe\s*/gi, "")
+    .replace(/Response Safety:\s*safe\s*/gi, "")
+    .replace(/\n{3,}/g, "\n\n")
+    .trim();
+}
 
 /**
  * Fait un appel API OpenAI-compatible vers une URL donnée.
@@ -168,18 +182,21 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
 
         try {
           const parsed = JSON.parse(data);
-          const token = parsed.choices?.[0]?.delta?.content || "";
-          if (token) {
-            fullContent += token;
-            // Écrit directement dans la réponse SSE
-            res.write(`data: ${JSON.stringify({ token })}\n\n`);
+          const rawToken = parsed.choices?.[0]?.delta?.content || "";
+          if (rawToken) {
+            const token = filterAIContent(rawToken);
+            if (token) {
+              fullContent += rawToken; // conserve l'original pour fullContent (filtré à la fin)
+              // Écrit directement dans la réponse SSE
+              res.write(`data: ${JSON.stringify({ token })}\n\n`);
+            }
           }
         } catch { /* ignorer les lignes mal formées */ }
       }
     }
 
     // Le signal de fin (done) est envoyé par la route appelante avec les métadonnées
-    return { ok: true, fullContent };
+    return { ok: true, fullContent: filterAIContent(fullContent) };
   } catch (err) {
     if (err.name === "AbortError") {
       return { ok: false, status: 499, errText: "Requête annulée" };
@@ -194,7 +211,7 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
  * L'ordre dynamique place le provider ayant une clé API en premier :
  *   - Si une clé OpenRouter est configurée → OpenRouter en tête
  *   - Sinon → le premier provider non-OpenRouter configuré devient le primary
- * Cela permet d'utiliser Groq, SiliconFlow, OpenAI ou une API locale
+ * Cela permet d'utiliser Groq, OpenAI ou une API locale
  * comme fournisseur principal, sans dépendre d'OpenRouter.
  */
 function getFallbackProviders(settings) {
@@ -228,17 +245,7 @@ function getFallbackProviders(settings) {
     });
   }
 
-  // 3) SiliconFlow (gratuit, fallback #2)
-  if (settings.siliconflowApiKey) {
-    providers.push({
-      name: "SiliconFlow",
-      model: "deepseek-ai/DeepSeek-V3",
-      baseUrl: "https://api.siliconflow.cn/v1",
-      apiKey: settings.siliconflowApiKey
-    });
-  }
-
-  // 4) API personnalisée (fallback #3)
+  // 3) API personnalisée (fallback #2)
   if (settings.customApiUrl) {
     providers.push({
       name: "API locale",
@@ -248,7 +255,7 @@ function getFallbackProviders(settings) {
     });
   }
 
-  // 5) OpenAI (fallback #4, payant)
+  // 4) OpenAI (fallback #3, payant)
   if (settings.openaiApiKey) {
     providers.push({
       name: "OpenAI",
@@ -321,10 +328,10 @@ async function tryProviderChain(providers, apiCaller, options) {
  * Appelle l'API avec fallback automatique (version non-streaming).
  * Maintient la compatibilité avec les appels existants.
  */
-async function callOpenRouterWithFallback({ apiKey, model, messages, maxTokens, groqApiKey, siliconflowApiKey, customApiUrl, customApiKey, customApiModel, openaiApiKey }) {
+async function callOpenRouterWithFallback({ apiKey, model, messages, maxTokens, groqApiKey, customApiUrl, customApiKey, customApiModel, openaiApiKey }) {
   const settings = {
     apiKey, model, maxTokens,
-    groqApiKey, siliconflowApiKey,
+    groqApiKey,
     customApiUrl, customApiKey, customApiModel,
     openaiApiKey
   };
@@ -337,7 +344,7 @@ async function callOpenRouterWithFallback({ apiKey, model, messages, maxTokens, 
 const conversations = new Map();
 
 // Nettoie les conversations inactives toutes les 30 minutes
-const CONVERSATION_TTL = 60 * 60 * 1000; // 1 heure sans activité
+const CONVERSATION_TTL = 30 * 60 * 1000; // 30 minutes sans activité
 setInterval(() => {
   const now = Date.now();
   for (const [sessionId, session] of conversations) {
@@ -414,15 +421,14 @@ app.get("/api/admin/settings", requireAdmin, (req, res) => {
     hasOpenAiApiKey: !!settings.openaiApiKey,
     groqApiKey: maskKey(settings.groqApiKey),
     hasGroqApiKey: !!settings.groqApiKey,
-    siliconflowApiKey: maskKey(settings.siliconflowApiKey),
-    hasSiliconflowApiKey: !!settings.siliconflowApiKey,
+
     customApiKey: maskKey(settings.customApiKey),
     hasCustomApiKey: !!settings.customApiKey
   });
 });
 
 app.post("/api/admin/settings", requireAdmin, (req, res) => {
-  const { apiKey, openaiApiKey, groqApiKey, siliconflowApiKey, customApiUrl, customApiKey, customApiModel, model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily } = req.body;
+  const { apiKey, openaiApiKey, groqApiKey, customApiUrl, customApiKey, customApiModel, model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily } = req.body;
 
   // Construit le patch en ne conservant que les champs explicitement fournis
   const patch = {};
@@ -464,11 +470,10 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
   if (apiKey && !apiKey.includes("•")) patch.apiKey = apiKey;
   if (openaiApiKey && !openaiApiKey.includes("•")) patch.openaiApiKey = openaiApiKey;
   if (groqApiKey && !groqApiKey.includes("•")) patch.groqApiKey = groqApiKey;
-  if (siliconflowApiKey && !siliconflowApiKey.includes("•")) patch.siliconflowApiKey = siliconflowApiKey;
   if (customApiKey && !customApiKey.includes("•")) patch.customApiKey = customApiKey;
 
   const updated = saveSettings(patch);
-  res.json({ ok: true, settings: { ...updated, apiKey: undefined, openaiApiKey: undefined, groqApiKey: undefined, siliconflowApiKey: undefined, customApiKey: undefined } });
+  res.json({ ok: true, settings: { ...updated, apiKey: undefined, openaiApiKey: undefined, groqApiKey: undefined, customApiKey: undefined } });
 });
 
 // ---------------------------------------------------------------------------
@@ -488,7 +493,6 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
     // Vérifie qu'au moins une clé est fournie (OpenRouter ou un fallback)
     const hasAnyKey = testOpenRouterKey ||
       (req.body.groqApiKey || settings.groqApiKey) ||
-      (req.body.siliconflowApiKey || settings.siliconflowApiKey) ||
       (req.body.openaiApiKey || settings.openaiApiKey) ||
       (req.body.customApiKey || settings.customApiKey);
 
@@ -498,7 +502,6 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
 
     const openAiKey = req.body.openaiApiKey || settings.openaiApiKey;
     const groqKey = req.body.groqApiKey || settings.groqApiKey;
-    const siliconflowKey = req.body.siliconflowApiKey || settings.siliconflowApiKey;
     const customUrl = req.body.customApiUrl || settings.customApiUrl;
     const customKey = req.body.customApiKey || settings.customApiKey;
     const customModel = req.body.customApiModel || settings.customApiModel || "llama3.1-8b";
@@ -511,7 +514,6 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
       ],
       maxTokens: 10,
       groqApiKey: groqKey,
-      siliconflowApiKey: siliconflowKey,
       customApiUrl: customUrl,
       customApiKey: customKey,
       customApiModel: customModel,
@@ -698,7 +700,7 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
 
     const settings = getSettings();
     // Vérifie qu'au moins UNE clé API est configurée (OpenRouter ou fallbacks)
-    if (!settings.apiKey && !settings.groqApiKey && !settings.siliconflowApiKey && !settings.customApiUrl && !settings.openaiApiKey) {
+    if (!settings.apiKey && !settings.groqApiKey && !settings.customApiUrl && !settings.openaiApiKey) {
       return res.status(400).json({
         error: "Aucune clé API configurée. Va dans /admin pour en ajouter une."
       });
@@ -735,7 +737,6 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       messages,
       maxTokens: settings.maxTokens || 800,
       groqApiKey: settings.groqApiKey,
-      siliconflowApiKey: settings.siliconflowApiKey,
       customApiUrl: settings.customApiUrl,
       customApiKey: settings.customApiKey,
       customApiModel: settings.customApiModel,
@@ -762,7 +763,8 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       return res.status(502).json({ error: userMessage });
     }
 
-    const reply = result.data.choices?.[0]?.message?.content || "Désolé, je n'ai pas compris.";
+    const rawReply = result.data.choices?.[0]?.message?.content || "Désolé, je n'ai pas compris.";
+    const reply = filterAIContent(rawReply);
 
     // Sauvegarde de la conversation uniquement en cas de succès de l'appel
     const updatedHistory = [...history, { role: "assistant", content: reply }];
@@ -811,7 +813,7 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     const settings = getSettings();
 
     // Vérifie qu'au moins UNE clé API est configurée
-    if (!settings.apiKey && !settings.groqApiKey && !settings.siliconflowApiKey && !settings.customApiUrl && !settings.openaiApiKey) {
+    if (!settings.apiKey && !settings.groqApiKey && !settings.customApiUrl && !settings.openaiApiKey) {
       res.write(`data: ${JSON.stringify({ error: "Aucune clé API configurée" })}\n\n`);
       responseEnded = true;
       return res.end();
@@ -870,7 +872,7 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     }
 
     // Sauvegarde de la conversation
-    const fullReply = streamResult.fullContent || "";
+    const fullReply = streamResult.fullContent || ""; // déjà filtré par apiCallStream
     const updatedHistory = [...history, { role: "assistant", content: fullReply }];
     conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
 
@@ -896,12 +898,14 @@ app.get("/api/health", (req, res) => {
     uptime: process.uptime(),
     timestamp: new Date().toISOString(),
     version: "1.0.0",
-    embedding: !!require("./lib/embedding.js") // vérifie que le module est accessible
+    embedding: typeof ensureEmbeddingModel === "function" // vérifie que le module est accessible
   });
 });
 
 // Le widget lit ces infos publiques (nom du bot, message d'accueil) au chargement
+// Mis en cache 5 minutes par le navigateur (la config change rarement)
 app.get("/api/widget-config", widgetCors, (req, res) => {
+  res.set("Cache-Control", "public, max-age=300");
   const settings = getSettings();
   res.json({
     botName: settings.botName,
@@ -946,6 +950,7 @@ let suggestionsCacheTime = 0;
 const SUGGESTIONS_CACHE_TTL = 30 * 1000;
 
 app.get("/api/widget-suggestions", widgetCors, (req, res) => {
+  res.set("Cache-Control", "public, max-age=30");
   const now = Date.now();
   if (now - suggestionsCacheTime > SUGGESTIONS_CACHE_TTL) {
     const documents = getDocuments();

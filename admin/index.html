@@ -740,11 +740,6 @@
           <details style="margin-top:4px;">
             <summary style="cursor:pointer;font-size:0.76rem;color:var(--text-muted);font-weight:500;">➕ Autres fallbacks avancés</summary>
             <div style="margin-top:12px;display:grid;gap:14px;">
-              <div class="form-group">
-                <label for="set-siliconflow-apikey">Clé API SiliconFlow <span style="color:var(--text-muted);font-weight:400;">(gratuit, fallback #2)</span></label>
-                <input id="set-siliconflow-apikey" type="password" placeholder="sf-..." />
-                <div class="field-hint" id="siliconflow-apikey-status">Modèles DeepSeek et Qwen gratuits. <a href="https://siliconflow.cn/models" target="_blank" style="color:var(--accent);">Voir les modèles</a></div>
-              </div>
               <div class="form-group" style="border-top:1px solid var(--surface-border-light);padding-top:12px;">
                 <label for="set-openai-apikey">Clé API OpenAI <span style="color:var(--text-muted);font-weight:400;">(fallback #4, payant)</span></label>
                 <input id="set-openai-apikey" type="password" placeholder="sk-proj-..." />
@@ -1060,7 +1055,7 @@
     'qwen/qwen-2.5-7b-instruct:free':  { label: 'Qwen 2.5 7B',      tag: 'free',   emoji: '✨' }
   };
 
-  function updateModelIndicators(modelSlug, hasApiKey, fallbackUsed, originalModel, hasOpenAiApiKey, hasGroqApiKey, hasSiliconflowApiKey, hasCustomApi) {
+  function updateModelIndicators(modelSlug, hasApiKey, fallbackUsed, originalModel, hasOpenAiApiKey, hasGroqApiKey, hasCustomApi) {
     const dot = document.getElementById('model-dot');
     const badgeName = document.getElementById('model-name-display');
     const statusIcon = document.getElementById('model-status-icon');
@@ -1072,7 +1067,6 @@
     if (!hasApiKey) {
       const fallbacks = [
         hasGroqApiKey && 'Groq',
-        hasSiliconflowApiKey && 'SiliconFlow',
         hasCustomApi && 'API locale',
         hasOpenAiApiKey && 'OpenAI'
       ].filter(Boolean);
@@ -1125,13 +1119,11 @@
     if (fallbackUsed && originalModel && originalModel !== modelSlug) {
       const isOpenAi = modelSlug.includes('OpenAI');
       const isGroq = modelSlug.includes('Groq');
-      const isSiliconflow = modelSlug.includes('SiliconFlow');
       const isCustom = modelSlug.includes('personnalis');
       
       let fallbackLabel = modelSlug;
       if (isOpenAi) fallbackLabel = 'OpenAI gpt-4o-mini';
       else if (isGroq) fallbackLabel = 'Groq (free, Llama 3.3 70B)';
-      else if (isSiliconflow) fallbackLabel = 'SiliconFlow (free, DeepSeek/Qwen)';
       else if (isCustom) fallbackLabel = 'API personnalisée';
       
       statusDesc.textContent = `⚠ Fallback actif : ${fallbackLabel} (configuré : ${originalModel})`;
@@ -1141,7 +1133,6 @@
       const fallbacks = [
         'openrouter/free',
         hasGroqApiKey && 'Groq',
-        hasSiliconflowApiKey && 'SiliconFlow',
         hasCustomApi && 'API locale',
         hasOpenAiApiKey && 'OpenAI'
       ].filter(Boolean).join(' → ');
@@ -1185,15 +1176,6 @@
         ? '✓ Clé Groq configurée (14 400 req/jour gratuites — Llama 3.3 70B)'
         : 'Optionnel — ajoute une clé Groq gratuite pour un fallback fiable.';
 
-      // SiliconFlow key
-      document.getElementById('set-siliconflow-apikey').value = '';
-      document.getElementById('set-siliconflow-apikey').placeholder = s.hasSiliconflowApiKey
-        ? 'Clé enregistrée (' + s.siliconflowApiKey + ') — laisse vide pour ne pas changer'
-        : 'sf-...';
-      document.getElementById('siliconflow-apikey-status').textContent = s.hasSiliconflowApiKey
-        ? '✓ Clé SiliconFlow configurée (DeepSeek/Qwen gratuits)'
-        : 'Optionnel — ajoute une clé SiliconFlow pour des modèles DeepSeek/Qwen.';
-
       // OpenAI key
       document.getElementById('set-openai-apikey').value = '';
       document.getElementById('set-openai-apikey').placeholder = s.hasOpenAiApiKey
@@ -1214,7 +1196,7 @@
       document.getElementById('set-customapimodel').value = s.customApiModel || '';
       document.getElementById('set-customapimodel').placeholder = s.customApiModel || 'llama3.1-8b';
 
-      const hasAnyKey = s.hasApiKey || s.hasGroqApiKey || s.hasOpenAiApiKey || s.hasSiliconflowApiKey || s.hasCustomApiKey;
+      const hasAnyKey = s.hasApiKey || s.hasGroqApiKey || s.hasOpenAiApiKey || s.hasCustomApiKey;
 
       document.getElementById('set-apikey').value = '';
       document.getElementById('set-apikey').placeholder = s.hasApiKey
@@ -1231,7 +1213,7 @@
       const customModelInput = document.getElementById('set-custommodel');
       const customModelContainer = document.getElementById('custom-model-container');
 
-      updateModelIndicators(modelSlug, s.hasApiKey, false, null, s.hasOpenAiApiKey, s.hasGroqApiKey, s.hasSiliconflowApiKey, !!s.customApiUrl);
+      updateModelIndicators(modelSlug, s.hasApiKey, false, null, s.hasOpenAiApiKey, s.hasGroqApiKey, !!s.customApiUrl);
 
       if (!KNOWN_MODELS[modelSlug]) {
         modelSelect.value = 'custom';
@@ -1286,7 +1268,6 @@
     const apiKey = document.getElementById('set-apikey').value;
     const openaiApiKey = document.getElementById('set-openai-apikey').value;
     const groqApiKey = document.getElementById('set-groq-apikey').value;
-    const siliconflowApiKey = document.getElementById('set-siliconflow-apikey').value;
     const customApiUrl = document.getElementById('set-customapiurl').value;
     const customApiKey = document.getElementById('set-customapikey').value;
     const customApiModel = document.getElementById('set-customapimodel').value;
@@ -1306,7 +1287,7 @@
     try {
       const res = await apiFetch('/api/admin/test-connection', {
         method: 'POST',
-        body: JSON.stringify({ apiKey, model: selectedModel, openaiApiKey, groqApiKey, siliconflowApiKey, customApiUrl, customApiKey, customApiModel })
+        body: JSON.stringify({ apiKey, model: selectedModel, openaiApiKey, groqApiKey, customApiUrl, customApiKey, customApiModel })
       });
       const data = await res.json();
 
@@ -1319,7 +1300,6 @@
           let fallbackName = data.model;
           if (modelStr.includes('OpenAI')) fallbackName = 'OpenAI gpt-4o-mini';
           else if (modelStr.includes('Groq')) fallbackName = 'Groq (free, Llama 3.3 70B)';
-          else if (modelStr.includes('SiliconFlow')) fallbackName = 'SiliconFlow (free, DeepSeek/Qwen)';
           else if (modelStr.includes('personnalis')) fallbackName = 'API personnalisée';
           title.textContent = `⚠ Fallback activé — ${fallbackName}`;
           detail.textContent = `Le modèle configuré (${data.originalModel}) était saturé. Fallback automatique vers ${data.model}. ${data.reply ? `Réponse : "${data.reply}"` : ''}`;
@@ -1333,11 +1313,9 @@
         const hasOpenAi = !!openAiInput.value || openAiInput.placeholder.includes('enregistrée');
         const hasGroq = !!document.getElementById('set-groq-apikey').value || 
           document.getElementById('set-groq-apikey').placeholder.includes('enregistrée');
-        const hasSiliconflow = !!document.getElementById('set-siliconflow-apikey').value || 
-          document.getElementById('set-siliconflow-apikey').placeholder.includes('enregistrée');
         const hasCustomApi = !!document.getElementById('set-customapiurl').value;
         // Met à jour l'indicateur visuel du modèle
-        updateModelIndicators(data.model, true, data.fallbackUsed, data.originalModel, hasOpenAi, hasGroq, hasSiliconflow, hasCustomApi);
+        updateModelIndicators(data.model, true, data.fallbackUsed, data.originalModel, hasOpenAi, hasGroq, hasCustomApi);
       } else {
         resultBox.className = 'test-result show error';
         icon.textContent = '✗';
@@ -1388,7 +1366,6 @@
         apiKey: document.getElementById('set-apikey').value,
         openaiApiKey: document.getElementById('set-openai-apikey').value,
         groqApiKey: document.getElementById('set-groq-apikey').value,
-        siliconflowApiKey: document.getElementById('set-siliconflow-apikey').value,
         customApiUrl: document.getElementById('set-customapiurl').value,
         customApiKey: document.getElementById('set-customapikey').value,
         customApiModel: document.getElementById('set-customapimodel').value,

@@ -1,4 +1,4 @@
-# Chatbot IA — widget embarquable + tableau de bord en ligne
+# Aïda — Chatbot IA widget embarquable + tableau de bord
 
 Ce n'est **pas** un widget qui tourne en local sur ton site : c'est un service que tu déploies
 une seule fois (comme Crisp ou Intercom), qui expose :
@@ -6,7 +6,9 @@ une seule fois (comme Crisp ou Intercom), qui expose :
 1. un **script à coller** sur ton vrai site (`<script src="https://ton-backend.com/widget.js">`),
    peu importe où ce site est hébergé ;
 2. un **tableau de bord admin en ligne** (`https://ton-backend.com/admin`) pour tout gérer :
-   clé API, personnalité du bot, et base de connaissances (RAG).
+   clés API, personnalité du bot, et base de connaissances (RAG).
+
+---
 
 ## Comment ça s'articule
 
@@ -22,6 +24,8 @@ Ton site web (n'importe où)          Ce backend (déployé une fois, ex: Railwa
 
 Le script détecte lui-même l'adresse de ce backend (via sa propre URL), donc il n'y a
 **aucune configuration à faire dans le code de ton site** : juste coller le tag `<script>`.
+
+---
 
 ## Structure du projet
 
@@ -41,6 +45,8 @@ chatbot-rag/
 └── .env.example
 ```
 
+---
+
 ## Étape 1 — Déployer ce backend en ligne
 
 Ce projet est un serveur Node classique. Choisis un hébergeur qui garde le serveur actif
@@ -56,20 +62,98 @@ qui tourne — pense à Railway, Render, ou Fly.io) :
    proposent cette option ("persistent volume" / "disk").
 5. Note l'URL publique que la plateforme te donne, par exemple `https://mon-chatbot.up.railway.app`.
 
-## Étape 2 — Configurer le bot depuis le tableau de bord
+---
 
-Rends-toi sur `https://mon-chatbot.up.railway.app/admin` :
+## Étape 2 — Configurer les fournisseurs IA
 
-1. Connecte-toi avec le mot de passe admin configuré à l'étape précédente.
-2. Onglet **Paramètres** : colle ta clé API OpenRouter (récupérable sur
-   https://openrouter.ai/keys), choisis le modèle, personnalise le nom du bot et le
-   message d'accueil.
-3. Onglet **Base de connaissances** : colle le contenu de tes pages (FAQ, horaires, tarifs,
-   présentation de l'entreprise...). Chaque document est découpé en passages ; à chaque
-   question d'un visiteur, le backend retrouve les passages pertinents et les injecte dans
-   le prompt envoyé au modèle avant de générer la réponse.
+Le chatbot supporte **4 providers** avec une chaîne de fallback automatique :
 
-## Étape 3 — Installer le widget sur ton vrai site
+### Chaîne de fallback
+
+```
+1. OpenRouter     → modèle principal (configuré dans l'admin)
+2. Groq           → fallback gratuit (si clé configurée)
+3. API locale     → fallback personnalisé (Ollama, vLLM...)
+4. OpenAI         → fallback ultime payant (gpt-4o-mini)
+```
+
+Si un provider est saturé (429), le suivant prend le relais automatiquement avec un
+backoff exponentiel (max 2s d'attente).
+
+### OpenRouter (recommandé — modèle principal)
+
+- Crée un compte sur [openrouter.ai](https://openrouter.ai)
+- Génère une clé API sur [openrouter.ai/keys](https://openrouter.ai/keys)
+- Colle la clé dans l'admin (onglet **Paramètres** → **Clé API OpenRouter**)
+- Choisis un modèle parmi ceux proposés (Gemini 2.0 Flash, Llama 3.3 70B, Mistral Large...)
+
+### Groq (fallback gratuit — recommandé)
+
+- Crée un compte sur [console.groq.com](https://console.groq.com)
+- Génère une clé API gratuite (14 400 req/jour)
+- Colle la clé dans l'admin → **Clé API Groq**
+- Modèle utilisé : `llama-3.3-70b-versatile`
+
+### API personnalisée (fallback local)
+
+- Pour Ollama, vLLM, LocalAI, ou tout serveur OpenAI-compatible
+- Configure l'URL (ex: `http://localhost:11434/v1`) et le nom du modèle
+- Pas de clé API nécessaire si le serveur est local
+
+### OpenAI (fallback ultime payant)
+
+- Crée un compte sur [platform.openai.com](https://platform.openai.com)
+- Génère une clé API (sk-proj-...)
+- Colle la clé dans l'admin → **Clé API OpenAI**
+- Modèle utilisé : `gpt-4o-mini`
+
+### Notes importantes
+
+> ⚠️ **Un seul provider suffit** pour faire fonctionner le chatbot. Les providers
+> supplémentaires sont des **fallbacks** : ils sont utilisés uniquement si le provider
+> principal est saturé ou indisponible.
+>
+> 💡 **Groq est recommandé en fallback** car son free tier est très généreux
+> (14 400 requêtes/jour) et ses modèles sont rapides.
+>
+> ❌ **SiliconFlow a été retiré** des providers disponibles car son API renvoyait des
+> annotations de sécurité (`"User Safety: safe"`) dans le contenu des réponses, ce qui
+> altérait la qualité du chatbot.
+
+### Tester la connexion
+
+Une fois les clés configurées, clique sur **🔌 Tester la connexion** dans l'admin.
+Le test parcourt toute la chaîne de fallback et indique quel provider répond.
+
+---
+
+## Étape 3 — Configurer la personnalité du bot
+
+Dans l'onglet **Paramètres**, tu peux personnaliser :
+
+| Champ | Description |
+|---|---|
+| **Nom de l'assistant** | Le nom affiché dans le widget |
+| **Message d'accueil** | Le premier message que voit le visiteur |
+| **Instructions (system prompt)** | Le comportement et le ton de l'IA |
+
+### Le system prompt par défaut
+
+Le prompt par défaut est conçu pour éviter les réponses génériques. Il suit 5 règles :
+
+| Règle | Objectif |
+|---|---|
+| **#1** | Interdit les phrases passe-partout ("nous proposons divers services", "n'hésitez pas à nous contacter") |
+| **#2** | Chaque réponse doit reposer sur le contexte fourni (documents RAG) |
+| **#3** | Exige des informations spécifiques (chiffres, noms, prix) plutôt que du vague |
+| **#4** | Auto-vérification avant chaque réponse |
+| **#5** | Chaque réponse doit citer au moins une source du contexte |
+
+Le prompt est modifiable depuis l'admin → onglet **Paramètres** → **Instructions générales**.
+
+---
+
+## Étape 4 — Installer le widget sur ton vrai site
 
 Colle ce tag juste avant `</body>` sur les pages de ton site où tu veux le chatbot
 (remplace l'URL par celle de ton backend déployé) :
@@ -81,17 +165,20 @@ Colle ce tag juste avant `</body>` sur les pages de ton site où tu veux le chat
 C'est tout — aucune autre étape. Le widget va automatiquement :
 - afficher la bulle de chat flottante ;
 - charger le nom du bot et le message d'accueil configurés dans l'admin ;
-- envoyer chaque question à `/api/chat` sur ton backend, qui va chercher le contexte
+- envoyer chaque question au backend, qui va chercher le contexte
   pertinent (RAG) et interroger le modèle d'IA choisi.
 
-Options facultatives sur le tag script :
+### Options facultatives
+
 ```html
 <script src="https://mon-chatbot.../widget.js"
-        data-position="left"
-        data-accent-color="#111827"
-        data-accent-color-dark="#000000"
+        data-position="left"                    # position : "left" ou "right" (défaut)
+        data-accent-color="#6c63ff"             # couleur principale
+        data-accent-color-dark="#4a42cc"        # couleur de survol
         defer></script>
 ```
+
+---
 
 ## Tester en local avant de déployer
 
@@ -100,46 +187,75 @@ npm install
 cp .env.example .env    # choisis un mot de passe admin
 npm start
 ```
+
 - Page de test (simule ton vrai site) : http://localhost:3000
 - Tableau de bord : http://localhost:3000/admin
 
-## Comment fonctionne le RAG dans cette version
+---
 
-Pas de base de données vectorielle ni de service d'embeddings externe : la recherche de
-contexte (`lib/retrieval.js`) utilise une correspondance par mots-clés (fréquence de termes,
-insensible aux accents et à la casse). C'est volontairement simple pour ne dépendre que de
-ta clé API OpenRouter, et ça fonctionne bien pour une base de quelques dizaines de documents.
+## Base de connaissances (RAG)
 
-**Limite à connaître** : pas de compréhension sémantique fine (un synonyme absent du texte
-source peut ne pas être retrouvé). Pour un site avec beaucoup de contenu ou un besoin de
-recherche par sens plutôt que par mots-clés, il faudra migrer vers une vraie recherche
-vectorielle (embeddings + base vectorielle comme Pinecone, Weaviate, ou pgvector).
+Dans l'onglet **Base de connaissances**, tu peux :
+- **Ajouter du texte** manuellement (FAQ, tarifs, conditions...)
+- **Importer un PDF** (texte extrait automatiquement, 10 Mo max)
+- **Supprimer** des documents existants
 
-## Sécurité — à renforcer avant une vraie mise en production
+### Fonctionnement
 
-- **CORS** : les routes `/api/chat` et `/api/widget-config` acceptent les requêtes depuis
-  n'importe quel domaine (nécessaire puisque ton site et ce backend sont sur des domaines
-  différents). C'est normal pour un widget public, mais ça veut dire que n'importe qui
-  connaissant l'URL de ton backend peut aussi appeler `/api/chat` — pense à surveiller
-  l'usage et à ajouter un rate limiting (voir plus bas).
-- **Authentification admin** : un mot de passe simple envoyé à chaque requête, stocké côté
-  client dans `sessionStorage`. Suffisant pour démarrer, mais pour de la vraie production :
-  HTTPS obligatoire (la plupart des hébergeurs le font par défaut), et idéalement un vrai
-  système de comptes avec sessions/JWT à durée limitée.
-- **Clé API** : stockée en clair dans `data/store.json` côté serveur (jamais exposée au
-  navigateur). Ce fichier n'est pas servi publiquement, mais vérifie que ton hébergeur ne
-  l'expose pas par un autre moyen (ex: dossier `data/` accessible via un autre service).
-- **Rate limiting** : ajoute une limite de requêtes par IP/session sur `/api/chat` pour
-  éviter les abus et maîtriser les coûts d'API (ex: package `express-rate-limit`).
+Le RAG utilise 2 méthodes de recherche :
 
-## Pour aller plus loin
+1. **Vectorielle** : embeddings générés automatiquement par un modèle local
+   (`@huggingface/transformers`) pour trouver les passages les plus proches
+   sémantiquement.
+2. **Mots-clés** : fallback si les embeddings ne sont pas disponibles, ou si
+   la recherche vectorielle ne trouve rien.
 
-- Support **multi-sites** : si tu gères plusieurs sites, on peut ajouter un `siteId` par
-  client (widget + config + base de connaissances séparées par site) plutôt qu'une seule
-  configuration globale.
-- **Streaming** des réponses (mot par mot) via Server-Sent Events.
-- **Import automatique** du contenu d'une page via son URL, plutôt que le copier-coller
-  manuel dans l'admin.
-- **Statistiques d'usage** (nombre de conversations, questions fréquentes) dans le
-  tableau de bord.
-# chatbot-aida
+Les passages pertinents sont injectés dans le prompt de l'IA avant chaque réponse,
+permettant au chatbot de répondre avec le contenu réel de ton site.
+
+---
+
+## API — Routes publiques
+
+| Route | Méthode | Description | Cache |
+|---|---|---|---|
+| `/api/chat` | POST | Envoyer un message (réponse complète) | Non |
+| `/api/chat/stream` | POST | Envoyer un message (streaming SSE) | Non |
+| `/api/widget-config` | GET | Config du widget (nom, couleurs, police) | 5 min |
+| `/api/widget-suggestions` | GET | Suggestions de questions | 30 s |
+| `/api/health` | GET | Health check | Non |
+
+---
+
+## Sécurité
+
+- **CORS** : les routes publiques acceptent les requêtes depuis n'importe quel domaine
+  (nécessaire pour un widget multi-sites).
+- **Authentification admin** : mot de passe stocké dans la variable d'environnement
+  `ADMIN_PASSWORD`, envoyé dans le header `x-admin-password`.
+- **Rate limiting** : 300 requêtes/15 min par IP sur `/api/chat`, 10 tentatives/15 min
+  sur `/api/admin/login`.
+- **Clés API** : stockées en clair dans `data/store.json` côté serveur, jamais exposées
+  au navigateur. Masquées dans l'admin (seuls les 6 derniers caractères sont visibles).
+
+---
+
+## Toutes les commandes npm
+
+```bash
+npm start       # Démarre le serveur (port 3000 ou $PORT)
+npm run dev     # Démarre avec Nodemon (redémarrage auto)
+```
+
+---
+
+## Déploiement continu
+
+Le projet inclut un workflow GitHub Actions (`daily-ping.yml`) qui ping l'URL
+toutes les 24h pour éviter la mise en veille sur Render (plan gratuit).
+
+---
+
+## Licence
+
+MIT
