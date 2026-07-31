@@ -85,14 +85,14 @@ backoff exponentiel (max 2s d'attente).
 - Crée un compte sur [openrouter.ai](https://openrouter.ai)
 - Génère une clé API sur [openrouter.ai/keys](https://openrouter.ai/keys)
 - Colle la clé dans l'admin (onglet **Paramètres** → **Clé API OpenRouter**)
-- Choisis un modèle parmi ceux proposés (Gemini 2.0 Flash, Llama 3.3 70B, Mistral Large...)
+- Choisis un modèle parmi ceux proposés (Gemma 4 31B, Nemotron 3 Super 120B, GPT-OSS 20B...), tous vérifiés comme valides et gratuits via l'API OpenRouter
 
 ### Groq (fallback gratuit — recommandé)
 
 - Crée un compte sur [console.groq.com](https://console.groq.com)
 - Génère une clé API gratuite (14 400 req/jour)
 - Colle la clé dans l'admin → **Clé API Groq**
-- Modèle utilisé : `llama-3.3-70b-versatile`
+- Chaîne de modèles utilisée : `openai/gpt-oss-120b` → `llama-3.3-70b-versatile` → `openai/gpt-oss-20b` (fallback automatique si un modèle est indisponible)
 
 ### API personnalisée (fallback local)
 

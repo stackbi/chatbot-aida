@@ -76,6 +76,27 @@ const OR_HEADERS = {
 const FALLBACK_MODELS = ["openrouter/free"];
 
 /**
+ * Détecte si une URL pointe vers une instance locale (Ollama, LM Studio…)
+ * qui ne requiert pas de clé API. Toute autre API distante (SiliconFlow,
+ * OpenRouter, etc.) exige un en-tête Authorization.
+ */
+function isLocalHostUrl(url) {
+  try {
+    // Supprime les crochets des adresses IPv6 littérales (Node renvoie "[::1]")
+    const host = new URL(url).hostname.replace(/^\[|\]$/g, "");
+    return (
+      host === "localhost" ||
+      /^127\./.test(host) ||
+      host === "::1" ||
+      host === "0.0.0.0" ||
+      /^(10\.|192\.168\.|172\.(1[6-9]|2[0-9]|3[01])\.)/.test(host)
+    );
+  } catch {
+    return false;
+  }
+}
+
+/**
  * Filtre les annotations de sécurité des fournisseurs IA
  * qui peuvent fuiter dans le contenu de la réponse.
  * Patterns connus : "User Safety: safe", "Response Safety: safe"
@@ -259,31 +280,47 @@ function getFallbackProviders(settings) {
     }
     for (const m of orModels) {
       providers.push({
-        name: m,
+        name: "OpenRouter",
         model: m,
         baseUrl: "https://openrouter.ai/api/v1",
         apiKey: settings.apiKey,
         extraHeaders: OR_HEADERS
       });
     }
-  }    // 2) Groq (gratuit, fallback #1 ou primary si pas d'OpenRouter) — modèle fiable
+  }    // 2) Groq (gratuit, fallback #1 ou primary si pas d'OpenRouter) — modèles fiables
   if (settings.groqApiKey) {
-    providers.push({
-      name: "Groq",
-      model: "llama-3.3-70b-versatile",
-      baseUrl: "https://api.groq.com/openai/v1",
-      apiKey: settings.groqApiKey
-    });
+    // Chaîne de modèles Groq validés (doc officielle) : le premier disponible répond,
+    // sinon le suivant est essayé. GPT-OSS 120B : le plus performant ; Llama 3.3 70B :
+    // modèle historique fiable ; GPT-OSS 20B : ultra-rapide (~1000 t/s).
+    const GROQ_MODELS = ["openai/gpt-oss-120b", "llama-3.3-70b-versatile", "openai/gpt-oss-20b"];
+    for (const gm of GROQ_MODELS) {
+      providers.push({
+        name: "Groq",
+        model: gm,
+        baseUrl: "https://api.groq.com/openai/v1",
+        apiKey: settings.groqApiKey
+      });
+    }
   }
 
   // 3) API personnalisée (fallback #2)
   if (settings.customApiUrl) {
-    providers.push({
-      name: "API locale",
-      model: settings.customApiModel || "llama3.1-8b",
-      baseUrl: settings.customApiUrl.replace(/\/+$/, ""),
-      apiKey: settings.customApiKey || ""
-    });
+    const url = settings.customApiUrl.replace(/\/+$/, "");
+    // Une API distante (SiliconFlow, OpenRouter…) exige une clé API :
+    // sans elle, la requête part sans en-tête Authorization →
+    // erreur 401 « Missing Authentication header ».
+    // Seules les instances locales (Ollama, LM Studio…) fonctionnent sans clé.
+    const requiresAuth = !isLocalHostUrl(url);
+    if (requiresAuth && !settings.customApiKey) {
+      console.warn(`⚠️ API personnalisée ignorée : une clé API est requise pour ${url} (hôte distant).`);
+    } else {
+      providers.push({
+        name: requiresAuth ? "API personnalisée" : "API locale",
+        model: settings.customApiModel || "llama3.1-8b",
+        baseUrl: url,
+        apiKey: settings.customApiKey || ""
+      });
+    }
   }
 
   // 4) OpenAI (fallback #3, payant)
@@ -306,6 +343,15 @@ function getFallbackProviders(settings) {
  */
 async function tryProviderChain(providers, apiCaller, options) {
   let lastResult = null;
+
+  // Aucun fournisseur utilisable (ex : API distante configurée sans clé API)
+  if (!providers || providers.length === 0) {
+    return {
+      ok: false,
+      status: 503,
+      errText: "Aucun fournisseur correctement configuré (clé API manquante)."
+    };
+  }
 
   for (let i = 0; i < providers.length; i++) {
     const provider = providers[i];
@@ -342,12 +388,14 @@ async function tryProviderChain(providers, apiCaller, options) {
     lastResult = result;
 
     // Erreur non-récupérable (401, 403, etc.) → stop immédiat
-    if (result.status !== 429 && result.status < 500) {
+    // Un 404 (modèle non trouvé / déprécié) est au contraire récupérable :
+    // on essaie le modèle suivant de la chaîne (ex: modèle OpenRouter déprécié).
+    if (result.status !== 429 && result.status !== 404 && result.status < 500) {
       console.error(`Erreur ${provider.name}:`, result.errText);
       return { ok: false, status: result.status, errText: result.errText, provider };
     }
 
-    // 429 ou 5xx → continue vers le provider suivant
+    // 429, 404 ou 5xx → continue vers le provider suivant
     console.warn(`${provider.name} ${result.status}, passage au suivant`);
   }
 
@@ -577,7 +625,7 @@ app.post("/api/admin/test-connection", requireAdmin, async (req, res) => {
         fullDetail = rawMsg ? errJson.error?.message + " : " + rawMsg : detail;
         // Pour les erreurs 401 (clé manquante ou invalide), on fournit un message clair
         if (result.status === 401) {
-          detail = "Clé API invalide ou manquante pour ce fournisseur. Vérifie la configuration.";
+          detail = `Clé API invalide ou manquante pour « ${result.provider?.name || "ce fournisseur"} ». Vérifie la configuration dans /admin.`;
           fullDetail = errText;
         }
       } catch {
@@ -736,6 +784,13 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
         error: "Aucune clé API configurée. Va dans /admin pour en ajouter une."
       });
     }
+    // Vérifie qu'au moins un fournisseur est réellement utilisable
+    // (ex : une API distante sans clé API est ignorée → aucune requête possible)
+    if (getFallbackProviders(settings).length === 0) {
+      return res.status(400).json({
+        error: "Aucun fournisseur utilisable : ajoute une clé API (OpenRouter, Groq, OpenAI) ou la clé de ton API personnalisée dans /admin."
+      });
+    }
 
     // 1. Récupération du contexte pertinent (RAG vectoriel + mots-clés) via cache
     const { documents, chunkEntries } = getRagContext();
@@ -786,8 +841,10 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       let userMessage;
       if (result.status === 429) {
         userMessage = `Erreur IA : tous les fournisseurs sont saturés (429). Réessaie dans quelques instants ou configure une clé de fallback.`;
+      } else if (result.status === 404) {
+        userMessage = `Erreur IA : le modèle configuré n'est plus disponible (404). Change-le dans /admin.`;
       } else if (result.status === 401 || result.status === 403) {
-        userMessage = `Erreur IA : la clé API OpenRouter est invalide ou a expiré. Vérifie-la dans /admin.`;
+        userMessage = `Erreur IA : clé API invalide ou manquante pour ${result.provider?.name || "le fournisseur"}. Vérifie-la dans /admin.`;
       } else {
         userMessage = `Erreur IA : ${detail}${result.status >= 500 ? ' (le fournisseur est peut-être temporairement indisponible)' : ''}`;
       }
@@ -851,6 +908,12 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
       responseEnded = true;
       return res.end();
     }
+    // Vérifie qu'au moins un fournisseur est réellement utilisable
+    if (getFallbackProviders(settings).length === 0) {
+      res.write(`data: ${JSON.stringify({ error: "Aucun fournisseur utilisable : ajoute une clé API dans /admin." })}\n\n`);
+      responseEnded = true;
+      return res.end();
+    }
 
     // 1. Contexte RAG (avec cache intégré)
     const { documents, chunkEntries } = getRagContext();
@@ -891,7 +954,11 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
       const errStatus = streamResult.status;
       let errMsg;
       if (errStatus === 401 || errStatus === 403) {
-        errMsg = "La clé API est invalide ou a expiré. Vérifie-la dans /admin.";
+        const errProvider = streamResult.provider?.name || "l'assistant";
+        const errProviderLabel = /^[aeiouyàâäéèêëîïôöùûü]/i.test(errProvider) ? `d'${errProvider}` : `de ${errProvider}`;
+        errMsg = `La clé API ${errProviderLabel} est invalide ou manquante. Vérifie-la dans /admin.`;
+      } else if (errStatus === 404) {
+        errMsg = "Le modèle configuré n'est plus disponible (404). Change-le dans /admin.";
       } else if (errStatus === 429) {
         errMsg = "Tous les fournisseurs sont saturés (429). Réessaie dans quelques instants.";
       } else if (errStatus >= 500) {

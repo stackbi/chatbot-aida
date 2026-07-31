@@ -735,7 +735,7 @@
           <div class="form-group">
             <label for="set-groq-apikey">Clé API Groq <span style="color:var(--text-muted);font-weight:400;">(gratuit, fallback #1)</span></label>
             <input id="set-groq-apikey" type="password" placeholder="gsk_..." />
-            <div class="field-hint" id="groq-apikey-status">Groq a un free tier très généreux (14 400 req/jour). Modèle : Llama 3.3 70B. <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent);">Obtenir une clé gratuite</a></div>
+            <div class="field-hint" id="groq-apikey-status">Groq a un free tier très généreux (14 400 req/jour). Modèle : GPT-OSS 120B → Llama 3.3 70B (fallback auto si indisponible). <a href="https://console.groq.com/keys" target="_blank" style="color:var(--accent);">Obtenir une clé gratuite</a></div>
           </div>
           <details style="margin-top:4px;">
             <summary style="cursor:pointer;font-size:0.76rem;color:var(--text-muted);font-weight:500;">➕ Autres fallbacks avancés</summary>
@@ -765,13 +765,12 @@
             <label for="set-model">Modèle IA principal</label>
             <select id="set-model">
                       <option value="openrouter/free">🔥 Auto : meilleur modèle gratuit dispo</option>
-              <option value="google/gemini-2.0-flash-exp:free">⚡ Gemini 2.0 Flash (free)</option>
               <option value="google/gemma-4-31b-it:free">⭐ Gemma 4 31B (free)</option>
-              <option value="meta-llama/llama-3.3-70b-instruct:free">🦙 Llama 3.3 70B (free)</option>
-              <option value="mistralai/mistral-large-2411:free">🌬️ Mistral Large (free)</option>
-              <option value="google/gemma-2-27b-it:free">Gemma 2 27B (free)</option>
-              <option value="deepseek/deepseek-r1-distill-qwen-7b:free">DeepSeek R1 7B (free)</option>
-              <option value="qwen/qwen-2.5-7b-instruct:free">Qwen 2.5 7B (free)</option>
+              <option value="nvidia/nemotron-3-super-120b-a12b:free">🚀 Nemotron 3 Super 120B (free)</option>
+              <option value="openai/gpt-oss-20b:free">✨ GPT-OSS 20B (free)</option>
+              <option value="google/gemma-4-26b-a4b-it:free">⚡ Gemma 4 26B (free)</option>
+              <option value="nvidia/nemotron-nano-9b-v2:free">⚡ Nemotron Nano 9B (free)</option>
+              <option value="inclusionai/ling-3.0-flash:free">💡 Ling 3.0 Flash (free)</option>
               <option value="custom">✏️ Autre modèle (saisie libre)</option>
             </select>
             <div class="field-hint" id="model-hint">Choisis un modèle ou sélectionne "Autre" pour saisir un slug personnalisé.</div>
@@ -1046,13 +1045,12 @@
   // ─── Modèles connus avec leurs libellés d'affichage ────────────
   const KNOWN_MODELS = {
     'openrouter/free':                  { label: 'Auto (meilleur gratuit)', tag: 'auto', emoji: '🔥' },
-    'google/gemini-2.0-flash-exp:free':{ label: 'Gemini 2.0 Flash',   tag: 'free', emoji: '⚡' },
     'google/gemma-4-31b-it:free':      { label: 'Gemma 4 31B',      tag: 'free',   emoji: '⭐' },
-    'meta-llama/llama-3.3-70b-instruct:free': { label: 'Llama 3.3 70B', tag: 'free', emoji: '🦙' },
-    'mistralai/mistral-large-2411:free': { label: 'Mistral Large',   tag: 'free', emoji: '🌬️' },
-    'google/gemma-2-27b-it:free':      { label: 'Gemma 2 27B',      tag: 'free',   emoji: '🧠' },
-    'deepseek/deepseek-r1-distill-qwen-7b:free': { label: 'DeepSeek R1 7B', tag: 'free', emoji: '🔍' },
-    'qwen/qwen-2.5-7b-instruct:free':  { label: 'Qwen 2.5 7B',      tag: 'free',   emoji: '✨' }
+    'nvidia/nemotron-3-super-120b-a12b:free': { label: 'Nemotron 3 Super 120B', tag: 'free', emoji: '🚀' },
+    'openai/gpt-oss-20b:free':          { label: 'GPT-OSS 20B',      tag: 'free',   emoji: '✨' },
+    'google/gemma-4-26b-a4b-it:free':  { label: 'Gemma 4 26B',      tag: 'free',   emoji: '⚡' },
+    'nvidia/nemotron-nano-9b-v2:free':  { label: 'Nemotron Nano 9B', tag: 'free',   emoji: '⚡' },
+    'inclusionai/ling-3.0-flash:free':  { label: 'Ling 3.0 Flash',   tag: 'free',   emoji: '💡' }
   };
 
   function updateModelIndicators(modelSlug, hasApiKey, fallbackUsed, originalModel, hasOpenAiApiKey, hasGroqApiKey, hasCustomApi) {
@@ -1299,7 +1297,7 @@
           const modelStr = data.model || '';
           let fallbackName = data.model;
           if (modelStr.includes('OpenAI')) fallbackName = 'OpenAI gpt-4o-mini';
-          else if (modelStr.includes('Groq')) fallbackName = 'Groq (free, Llama 3.3 70B)';
+          else if (modelStr.includes('Groq')) fallbackName = 'Groq (free, GPT-OSS 120B / Llama 3.3 70B)';
           else if (modelStr.includes('personnalis')) fallbackName = 'API personnalisée';
           title.textContent = `⚠ Fallback activé — ${fallbackName}`;
           detail.textContent = `Le modèle configuré (${data.originalModel}) était saturé. Fallback automatique vers ${data.model}. ${data.reply ? `Réponse : "${data.reply}"` : ''}`;
@@ -1324,15 +1322,15 @@
           title.textContent = '⚠ Trop de requêtes (429)';
           const extra = data.fullError && data.fullError !== data.error ? ` — ${data.fullError}` : '';
           detail.textContent = 'Limite de taux atteinte.' + extra + ' Attends 1 minute ou utilise un autre modèle (openrouter/free) ou une clé OpenAI de fallback.';
-        } else if (data.status === 402 || data.status === 403) {
+        } else if (data.status === 401 || data.status === 402 || data.status === 403) {
           title.textContent = `Erreur d\'authentification (${data.status})`;
-          detail.textContent = 'Ta clé API semble invalide ou a expiré. Vérifie-la sur openrouter.ai/keys.';
+          detail.textContent = data.error || 'Ta clé API semble invalide, expirée ou manquante. Vérifie la configuration du fournisseur dans /admin.';
         } else if (data.status === 502 || data.status === 503) {
           title.textContent = `Service indisponible (${data.status})`;
           detail.textContent = 'Le fournisseur du modèle est temporairement indisponible. Réessaie dans quelques instants.';
         } else {
           title.textContent = `Erreur (${data.status || '?'})`;
-          detail.textContent = data.fullError || data.error || 'Réponse inconnue';
+          detail.textContent = data.error || data.fullError || 'Réponse inconnue';
         }
       }
     } catch (err) {
