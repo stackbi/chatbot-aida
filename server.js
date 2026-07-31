@@ -100,28 +100,38 @@ function isLocalHostUrl(url) {
  * Filtre les annotations de sécurité des fournisseurs IA
  * qui peuvent fuiter dans le contenu de la réponse.
  * Patterns connus : "User Safety: safe", "Response Safety: safe"
+ *
+ * @param {Object} [opts] - Options
+ * @param {boolean} [opts.trim=true] - Trim des bords. DOIT être false pour un
+ *   token SSE individuel : le trim supprimerait les espaces de tête/fin qui
+ *   séparent les mots (ex: " sommes" → "sommes"), collant tout le texte.
  */
-function filterAIContent(text) {
+function filterAIContent(text, { trim = true } = {}) {
   if (!text) return "";
-  return text
+  const result = text
     .replace(/User Safety:\s*safe\s*/gi, "")
     .replace(/Response Safety:\s*safe\s*/gi, "")
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(/\n{3,}/g, "\n\n");
+  return trim ? result.trim() : result;
 }
 
 /**
  * Normalise les espaces dans la réponse de l'IA.
  * Corrige les mots collés entre eux et les problèmes de ponctuation.
  * S'adapte au français (lettres accentuées comprises).
+ *
+ * @param {Object} [opts] - Options
+ * @param {boolean} [opts.trim=true] - Trim des bords. DOIT être false pour un
+ *   token SSE individuel : le trim supprimerait les espaces de tête/fin qui
+ *   séparent les mots (ex: " sommes" → "sommes"), collant tout le texte.
  */
-function normalizeSpacing(text) {
+function normalizeSpacing(text, { trim = true } = {}) {
   if (!text) return "";
 
   // Lettres latines (incluant les accents français)
   const letters = "A-Za-zÀ-ÖØ-öø-ÿéèêëàâäùûüôöîïçÉÈÊËÀÂÄÙÛÜÔÖÎÏÇ";
 
-  return text
+  const result = text
     // 1) Normalise TOUS les types d'espaces Unicode vers U+0020
     // (non-breaking space, narrow no-break space, espace insécable fine, etc.)
     .replace(/[\u00A0\u202F\u2000-\u200A\u200B\u2060]/g, " ")
@@ -136,8 +146,9 @@ function normalizeSpacing(text) {
     // 6) Supprime les espaces multiples
     .replace(/[ ]{2,}/g, " ")
     // 7) Normalise les retours à la ligne
-    .replace(/\n{3,}/g, "\n\n")
-    .trim();
+    .replace(/\n{3,}/g, "\n\n");
+
+  return trim ? result.trim() : result;
 }
 
 /**
@@ -236,11 +247,15 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
           const parsed = JSON.parse(data);
           const rawToken = parsed.choices?.[0]?.delta?.content || "";
           if (rawToken) {
-            const token = filterAIContent(rawToken);
-            if (token) {
+            // Nettoie les annotations de sécurité SANS trimmer : les tokens SSE
+            // arrivent souvent avec un espace de tête (ex: " sommes"). Tout trim
+            // supprimerait cet espace et collerait les mots entre eux.
+            const cleaned = filterAIContent(rawToken, { trim: false });
+            if (cleaned) {
               fullContent += rawToken; // conserve l'original pour fullContent (filtré à la fin)
-              // Normalise l'espacement de chaque token SSE
-              const spacedToken = normalizeSpacing(token);
+              // Normalise l'espacement interne du token (ponctuation) sans toucher
+              // aux bords : les espaces inter-mots sont préservés.
+              const spacedToken = normalizeSpacing(cleaned, { trim: false });
               // Écrit directement dans la réponse SSE
               res.write(`data: ${JSON.stringify({ token: spacedToken })}\n\n`);
             }

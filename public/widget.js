@@ -1466,6 +1466,12 @@
               if (botMsgEl) {
                 playNotification();
                 setTimeout(showSuggestionChips, 600);
+                // Remplace le contenu affiché par la version finale normalisée
+                // par le serveur (espaces inter-mots rétablis, ponctuation corrigée).
+                if (data.fullContent) {
+                  fullContent = data.fullContent;
+                  botMsgEl.innerHTML = formatMessage(sanitizePartialMarkdown(fullContent));
+                }
               }
             }
           } catch { /* ignorer */ }
@@ -1537,6 +1543,12 @@
                   if (botMsgEl) {
                     playNotification();
                     setTimeout(showSuggestionChips, 600);
+                    // Remplace le contenu affiché par la version finale normalisée
+                    // par le serveur (espaces inter-mots rétablis, ponctuation corrigée).
+                    if (d.fullContent) {
+                      content = d.fullContent;
+                      botMsgEl.innerHTML = formatMessage(sanitizePartialMarkdown(content));
+                    }
                   }
                 }
               } catch { /* ignorer */ }
