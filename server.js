@@ -27,6 +27,15 @@ dotenv.config();
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const app = express();
 
+// Derrière un reverse proxy (Railway, Render, Nginx…) : active le trust proxy
+// pour que le rate limiting et req.ip utilisent la vraie IP du visiteur.
+// À activer UNIQUEMENT si le serveur est derrière un proxy de confiance.
+// Valeurs explicites pour désactiver : "false", "0", "off".
+const trustProxy = process.env.TRUST_PROXY;
+if (trustProxy && !/^(false|0|off|no)$/i.test(trustProxy)) {
+  app.set("trust proxy", Number(trustProxy) || 1);
+}
+
 app.use(express.json({ limit: "20mb" }));
 // 20 Mo pour supporter le surcoût base64 des uploads PDF (10 Mo fichier → ~13,3 Mo base64)
 
@@ -72,6 +81,17 @@ const OR_HEADERS = {
   "HTTP-Referer": process.env.SITE_URL || "https://aida-chatbot.local",
   "X-Title": "Aïda Chatbot"
 };
+
+/**
+ * Comparaison de chaînes à temps constant (évite les attaques par timing
+ * sur le mot de passe admin).
+ */
+function safeEqual(a, b) {
+  const ba = Buffer.from(String(a));
+  const bb = Buffer.from(String(b));
+  if (ba.length !== bb.length) return false;
+  return crypto.timingSafeEqual(ba, bb);
+}
 
 // Liste des modèles de fallback en cas de rate limit (429)
 const FALLBACK_MODELS = ["openrouter/free"];
@@ -194,6 +214,10 @@ async function apiCall({ baseUrl, apiKey, model, messages, maxTokens, extraHeade
  * Appel API en streaming (SSE) — écrit chaque token directement dans la réponse HTTP.
  * Compatible OpenAI / OpenRouter / Groq / tout fournisseur OpenAI-like.
  */
+// Durée sans aucun token après laquelle un stream est considéré comme mort
+// (connexion coupée, provider muet). Un flux lent mais régulier n'est PAS coupé.
+const STREAM_IDLE_TIMEOUT_MS = 45000;
+
 async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extraHeaders, res, signal }) {
   const headers = {
     "Content-Type": "application/json",
@@ -201,10 +225,24 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
     ...(extraHeaders || {})
   };
 
-  // Timeout de 30 secondes pour l'appel streaming
-  const timeoutSignal = AbortSignal.timeout(30000);
-  // Combine le signal passé (abortController) avec le timeout
-  const combinedSignal = signal ? AbortSignal.any([signal, timeoutSignal]) : timeoutSignal;
+  // Contrôle interne : annule l'appel si aucun token n'arrive pendant une
+  // longue période (provider muet ou connexion morte). Le signal passé par
+  // l'appelant (abortController du route) reste prioritaire : il est déclenché
+  // quand le client se déconnecte.
+  const internalController = new AbortController();
+  const combinedSignal = signal
+    ? AbortSignal.any([signal, internalController.signal])
+    : internalController.signal;
+
+  let idleTimer = null;
+  const restartIdleTimer = () => {
+    clearTimeout(idleTimer);
+    idleTimer = setTimeout(() => {
+      console.warn(`⏱️ Aucun token reçu pendant ${STREAM_IDLE_TIMEOUT_MS / 1000}s — stream annulé (${baseUrl})`);
+      internalController.abort();
+    }, STREAM_IDLE_TIMEOUT_MS);
+  };
+  restartIdleTimer();
 
   try {
     const response = await fetch(`${baseUrl}/chat/completions`, {
@@ -222,6 +260,7 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
 
     if (!response.ok) {
       const errText = await response.text();
+      clearTimeout(idleTimer); // pas de watchdog résiduel sur ce chemin
       return { ok: false, status: response.status, errText };
     }
 
@@ -233,16 +272,18 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
+      if (value && value.byteLength > 0) restartIdleTimer(); // activité → reset du watchdog
 
       buffer += decoder.decode(value, { stream: true });
       const lines = buffer.split("\n");
       buffer = lines.pop() || "";
 
+      let doneReceived = false;
       for (const line of lines) {
         const trimmed = line.trim();
         if (!trimmed || !trimmed.startsWith("data: ")) continue;
         const data = trimmed.slice(6);
-        if (data === "[DONE]") break;
+        if (data === "[DONE]") { doneReceived = true; break; }
 
         try {
           const parsed = JSON.parse(data);
@@ -257,17 +298,22 @@ async function apiCallStream({ baseUrl, apiKey, model, messages, maxTokens, extr
               // Normalise l'espacement interne du token (ponctuation) sans toucher
               // aux bords : les espaces inter-mots sont préservés.
               const spacedToken = normalizeSpacing(cleaned, { trim: false });
-              // Écrit directement dans la réponse SSE
-              res.write(`data: ${JSON.stringify({ token: spacedToken })}\n\n`);
+              // Écrit directement dans la réponse SSE (ignore si le client est parti)
+              if (!res.writableEnded && !res.destroyed) {
+                res.write(`data: ${JSON.stringify({ token: spacedToken })}\n\n`);
+              }
             }
           }
         } catch { /* ignorer les lignes mal formées */ }
       }
+      if (doneReceived) break;
     }
 
+    clearTimeout(idleTimer);
     // Le signal de fin (done) est envoyé par la route appelante avec les métadonnées
     return { ok: true, fullContent: filterAIContent(fullContent) };
   } catch (err) {
+    clearTimeout(idleTimer);
     if (err.name === "AbortError") {
       return { ok: false, status: 499, errText: "Requête annulée" };
     }
@@ -394,7 +440,8 @@ async function tryProviderChain(providers, apiCaller, options) {
         ok: true,
         data: result.data,
         fullContent: result.fullContent,
-        modelUsed: provider.extraHeaders ? result.modelUsed : `${result.modelUsed} (${provider.name} fallback)`,
+        // N'annonce un fallback que si le provider n'est PAS le premier de la chaîne
+        modelUsed: i > 0 ? `${result.modelUsed} (${provider.name} fallback)` : result.modelUsed,
         fallbackUsed: i > 0,
         originalModel: providers[0].model,
         provider
@@ -402,6 +449,12 @@ async function tryProviderChain(providers, apiCaller, options) {
     }
 
     lastResult = result;
+
+    // Client déconnecté (stream avorté) : on stoppe la chaîne silencieusement,
+    // il n'y a plus personne à qui écrire une erreur.
+    if (result.status === 499) {
+      return { ok: false, status: 499, errText: "Requête annulée" };
+    }
 
     // Erreur non-récupérable (401, 403, etc.) → stop immédiat
     // Un 404 (modèle non trouvé / déprécié) est au contraire récupérable :
@@ -466,7 +519,8 @@ const chatLimiter = rateLimit({
 // ---------------------------------------------------------------------------
 function requireAdmin(req, res, next) {
   const provided = req.headers["x-admin-password"];
-  if (!process.env.ADMIN_PASSWORD || !provided || provided !== process.env.ADMIN_PASSWORD) {
+  const expected = process.env.ADMIN_PASSWORD;
+  if (!expected || !provided || !safeEqual(provided, expected)) {
     return res.status(401).json({ error: "Non autorisé" });
   }
   next();
@@ -492,7 +546,7 @@ app.use("/api/admin", (req, res, next) => {
 
 app.post("/api/admin/login", loginLimiter, (req, res) => {
   const { password } = req.body;
-  if (process.env.ADMIN_PASSWORD && password === process.env.ADMIN_PASSWORD) {
+  if (process.env.ADMIN_PASSWORD && safeEqual(password, process.env.ADMIN_PASSWORD)) {
     return res.json({ ok: true });
   }
   res.status(401).json({ error: "Mot de passe incorrect" });
@@ -918,17 +972,30 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
   res.flushHeaders();
 
   let responseEnded = false;
+
+  // Ne tente jamais d'écrire sur un socket fermé (client déconnecté) : évite
+  // les erreurs ERR_STREAM_WRITE_AFTER_END et les logs parasites.
+  res.on("error", () => {});
+  const safeWrite = (payload) => {
+    if (responseEnded || res.writableEnded || res.destroyed) return;
+    try { res.write(payload); } catch { /* socket fermé */ }
+  };
+  const safeEnd = () => {
+    if (responseEnded || res.writableEnded || res.destroyed) return;
+    try { res.end(); } catch { /* socket fermé */ }
+  };
+
   try {
     const { message, sessionId, siteUrl } = req.body;
     if (!message || typeof message !== "string") {
-      res.write(`data: ${JSON.stringify({ error: "Message manquant" })}\n\n`);
+      safeWrite(`data: ${JSON.stringify({ error: "Message manquant" })}\n\n`);
       responseEnded = true;
-      return res.end();
+      return safeEnd();
     }
     if (message.length > 4000) {
-      res.write(`data: ${JSON.stringify({ error: "Message trop long (maximum 4000 caractères)." })}\n\n`);
+      safeWrite(`data: ${JSON.stringify({ error: "Message trop long (maximum 4000 caractères)." })}\n\n`);
       responseEnded = true;
-      return res.end();
+      return safeEnd();
     }
 
     const effectiveSessionId = sessionId || "anon-" + crypto.randomUUID();
@@ -936,15 +1003,15 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
 
     // Vérifie qu'au moins UNE clé API est configurée
     if (!settings.apiKey && !settings.groqApiKey && !settings.customApiUrl && !settings.openaiApiKey) {
-      res.write(`data: ${JSON.stringify({ error: "Aucune clé API configurée" })}\n\n`);
+      safeWrite(`data: ${JSON.stringify({ error: "Aucune clé API configurée" })}\n\n`);
       responseEnded = true;
-      return res.end();
+      return safeEnd();
     }
     // Vérifie qu'au moins un fournisseur est réellement utilisable
     if (getFallbackProviders(settings).length === 0) {
-      res.write(`data: ${JSON.stringify({ error: "Aucun fournisseur utilisable : ajoute une clé API dans /admin." })}\n\n`);
+      safeWrite(`data: ${JSON.stringify({ error: "Aucun fournisseur utilisable : ajoute une clé API dans /admin." })}\n\n`);
       responseEnded = true;
-      return res.end();
+      return safeEnd();
     }
 
     // 1. Contexte RAG (avec cache intégré)
@@ -987,6 +1054,20 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
 
     // 4. Chaîne de fallback via la fonction partagée
     const abortController = new AbortController();
+    // Si le client ferme la connexion (on quitte la page, on ferme le chat…),
+    // on annule immédiatement l'appel upstream : plus de tokens gaspillés,
+    // plus de socket bloqué jusqu'au timeout.
+    // NB : on écoute 'close' sur la RÉPONSE, PAS sur req — depuis Node 16,
+    // req émet 'close' dès que le corps est lu (donc immédiatement), ce qui
+    // annulerait le stream avant même le premier token. res 'close' n'arrive,
+    // lui, qu'à la fermeture réelle du socket (client parti) ou après res.end().
+    // Garde avec notre flag responseEnded (pas res.destroyed : ce dernier est
+    // mis à true dès que le socket du client est fermé, ce qui bloquerait
+    // l'abort au moment même où il faut annuler l'appel upstream).
+    const onClientClose = () => {
+      if (!responseEnded) abortController.abort();
+    };
+    res.on("close", onClientClose);
     const providers = getFallbackProviders(settings);
 
     const streamResult = await tryProviderChain(providers, (opts) => apiCallStream({ ...opts, res, signal: abortController.signal }), {
@@ -995,9 +1076,16 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     });
 
     if (!streamResult.ok) {
+      // Si le client est déjà parti, inutile d'écrire l'erreur
+      if (res.destroyed || res.writableEnded) return;
       const errStatus = streamResult.status;
       let errMsg;
-      if (errStatus === 401 || errStatus === 403) {
+      if (errStatus === 499) {
+        // Provider muet (watchdog d'oisiveté) : le client est toujours connecté,
+        // on lui explique que le fournisseur n'a pas répondu, pas qu'il y a un
+        // problème de configuration.
+        errMsg = "Le fournisseur IA n'a pas répondu. Réessaie dans quelques instants.";
+      } else if (errStatus === 401 || errStatus === 403) {
         const errProvider = streamResult.provider?.name || "l'assistant";
         const errProviderLabel = /^[aeiouyàâäéèêëîïôöùûü]/i.test(errProvider) ? `d'${errProvider}` : `de ${errProvider}`;
         errMsg = `La clé API ${errProviderLabel} est invalide ou manquante. Vérifie-la dans /admin.`;
@@ -1010,9 +1098,9 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
       } else {
         errMsg = "Erreur de connexion aux fournisseurs IA. Vérifie ta configuration dans /admin.";
       }
-      res.write(`data: ${JSON.stringify({ error: errMsg })}\n\n`);
+      safeWrite(`data: ${JSON.stringify({ error: errMsg })}\n\n`);
       responseEnded = true;
-      return res.end();
+      return safeEnd();
     }
 
     // Sauvegarde de la conversation
@@ -1022,16 +1110,15 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
 
     // Signal de fin avec métadonnées
-    res.write(`data: ${JSON.stringify({ done: true, fullContent: fullReply, modelUsed: streamResult.modelUsed, fallbackUsed: streamResult.fallbackUsed, sourcesUsed: relevantChunks.map(r => r.title), siteExplored })}\n\n`);
+    safeWrite(`data: ${JSON.stringify({ done: true, fullContent: fullReply, modelUsed: streamResult.modelUsed, fallbackUsed: streamResult.fallbackUsed, sourcesUsed: relevantChunks.map(r => r.title), siteExplored })}\n\n`);
     responseEnded = true;
-    res.end();
+    safeEnd();
   } catch (err) {
     console.error("Erreur streaming:", err);
     if (!responseEnded) {
-      try {
-        res.write(`data: ${JSON.stringify({ error: "Erreur serveur" })}\n\n`);
-        res.end();
-      } catch { /* already closed */ }
+      safeWrite(`data: ${JSON.stringify({ error: "Erreur serveur" })}\n\n`);
+      responseEnded = true;
+      safeEnd();
     }
   }
 });

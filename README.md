@@ -34,7 +34,10 @@ chatbot-rag/
 ├── server.js              → serveur Express (routes /api/chat, /api/admin/*, CORS)
 ├── lib/
 │   ├── store.js           → persistance des paramètres et documents (fichier JSON)
-│   └── retrieval.js       → recherche du contexte pertinent (RAG)
+│   ├── retrieval.js       → recherche du contexte pertinent (RAG)
+│   ├── embedding.js       → embeddings vectoriels locaux (@huggingface/transformers)
+│   ├── spellcheck.js      → correcteur orthographique (LanguageTool, avec fusible)
+│   └── site-explorer.js   → exploration autonome du site web (mode autonome)
 ├── public/
 │   ├── widget.js           → LE SCRIPT à coller sur ton vrai site
 │   └── index.html         → page de test qui simule l'intégration réelle
@@ -193,6 +196,31 @@ npm start
 
 ---
 
+## Variables d'environnement
+
+Toutes les variables sont optionnelles **sauf `ADMIN_PASSWORD`**. Elles se
+configurent dans `.env` en local ou dans les paramètres de la plateforme
+(Railway / Render / Fly.io) en production.
+
+| Variable | Rôle | Valeur par défaut |
+|---|---|---|
+| `ADMIN_PASSWORD` | 🔴 **Obligatoire** — mot de passe du tableau de bord `/admin`. Comparé de façon **timing-safe** (anti attaque par mesure de temps) | — |
+| `PORT` | Port HTTP du serveur | `3000` |
+| `TRUST_PROXY` | **Reverse proxy** (Railway, Render, Nginx…) : active `trust proxy` pour que le rate limiting et `req.ip` utilisent la vraie IP du visiteur au lieu de celle du proxy. **À activer uniquement si tu es derrière un proxy de confiance.** Valeurs acceptées : `1` (un saut de proxy), `2`, ou l'adresse du proxy ; `false`/`0`/`off` désactivent explicitement | désactivé |
+| `CORS_ORIGINS` | Restreint les domaines autorisés à appeler les routes publiques (séparateur virgule). Ex. : `https://monsite.com,https://client2.com`. Laissé vide = n'importe quelle origine (nécessaire pour un widget multi-sites) | `*` (tout autorisé) |
+| `SITE_URL` | Identification de l'application côté OpenRouter (`HTTP-Referer`) | — |
+| `SPELLCHECK_ENABLED` | Désactive le correcteur orthographique externe (LanguageTool). Utile si l'API tierce est indisponible ou si tu veux zéro latence. Valeurs : `false` (désactive), tout autre = actif | activé |
+| `LANGTOOL_API_URL` | URL de l'API LanguageTool (peut pointer vers une instance auto-hébergée) | `https://api.languagetool.org/v2` |
+| `LANGTOOL_TIMEOUT` | Timeout de l'appel LanguageTool en millisecondes | `3000` |
+| `ALLOW_LOCAL_SITE_CRAWL` | Autorise l'exploration du site sur les adresses locales/privées (localhost, 127.0.0.1, 10.x…) — **uniquement pour les tests locaux**, jamais en production (risque SSRF) | désactivé |
+
+> 💡 **`TRUST_PROXY` et le rate limiting** : si tu déploies derrière un proxy (c'est le cas
+> par défaut sur Railway et Render), sans cette variable **toutes les requêtes partagent la
+> même IP** (celle du proxy) et le quota de 300 requêtes/15 min s'épuise très vite.
+> Ajoute simplement `TRUST_PROXY=1` dans les variables de la plateforme.
+
+---
+
 ## Base de connaissances (RAG)
 
 Dans l'onglet **Base de connaissances**, tu peux :
@@ -256,13 +284,23 @@ est intégré pour y trouver la réponse :
 ## Sécurité
 
 - **CORS** : les routes publiques acceptent les requêtes depuis n'importe quel domaine
-  (nécessaire pour un widget multi-sites).
+  (nécessaire pour un widget multi-sites). À restreindre avec `CORS_ORIGINS` si besoin.
 - **Authentification admin** : mot de passe stocké dans la variable d'environnement
-  `ADMIN_PASSWORD`, envoyé dans le header `x-admin-password`.
+  `ADMIN_PASSWORD`, envoyé dans le header `x-admin-password`. Comparaison **timing-safe**
+  (`crypto.timingSafeEqual`) pour éviter les attaques par mesure de temps.
 - **Rate limiting** : 300 requêtes/15 min par IP sur `/api/chat`, 10 tentatives/15 min
-  sur `/api/admin/login`.
+  sur `/api/admin/login`. Derrière un reverse proxy, pense à `TRUST_PROXY=1` pour que
+  le quota soit compté par visiteur réel et non par le proxy.
+- **Anti-XSS widget** : les contenus dynamiques (message d'accueil, suggestions) sont
+  échappés côté widget avant injection HTML.
+- **Streaming robuste** : si un visiteur ferme le chat en cours de réponse, l'appel
+  au fournisseur IA est **annulé immédiatement** (plus de tokens facturés inutilement) ;
+  un fournisseur muet est interrompu après 45 s sans flux.
 - **Clés API** : stockées en clair dans `data/store.json` côté serveur, jamais exposées
   au navigateur. Masquées dans l'admin (seuls les 6 derniers caractères sont visibles).
+- **Spellcheck** : le correcteur externe (LanguageTool) est protégé par un **fusible**
+  (circuit breaker) : après 2 échecs consécutifs, il est désactivé 5 min pour ne jamais
+  ajouter de latence à chaque réponse.
 
 ---
 

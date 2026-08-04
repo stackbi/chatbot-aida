@@ -1565,6 +1565,7 @@
 
         if (res.ok) {
           uploadStatus.textContent = '✓ PDF ingéré avec succès';
+          uploadBtn.removeAttribute('disabled');
           selectedPdfFile = null;
           fileInput.value = '';
           filenameDisplay.textContent = 'Glissez votre PDF ici ou cliquez pour choisir';

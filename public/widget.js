@@ -1002,6 +1002,7 @@
   let suggestionsLoaded = false;
   let welcomeMessage = "";
   let botName = "Aïda";
+  let isStreaming = false; // bloque les envois concurrents pendant un stream
 
   // ─── Suggestions ─────────────────────────────────────────────────────────
   const suggestionsPromise = fetch(BACKEND_ORIGIN + "/api/widget-suggestions")
@@ -1048,7 +1049,8 @@
 
     suggestions.forEach((q, i) => {
       const chip = document.createElement("button");
-      chip.innerHTML = `<span class="aida-chip-icon">${suggestIcon(q)}</span><span>${q}</span>`;
+      // q provient du contenu des documents (admin) : échappé pour éviter toute injection HTML
+      chip.innerHTML = `<span class="aida-chip-icon">${suggestIcon(q)}</span><span>${escapeHtml(q)}</span>`;
       // Staggered animation : chaque chip apparaît 70ms après le précédent
       chip.style.animationDelay = `${i * 70}ms`;
       chip.addEventListener("click", () => {
@@ -1141,6 +1143,16 @@
       text = text.replace(/```[\s\S]*$/, "");
     }
     return text;
+  }
+
+  // ─── Échappe le HTML (pour les contenus dynamiques injectés en innerHTML) ──
+  function escapeHtml(str) {
+    return String(str)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
   }
 
   // ─── Formateur markdown → HTML ───────────────────────────────────────────
@@ -1251,10 +1263,11 @@
 
     const invite = document.createElement("div");
     invite.id = "aida-invite";
+    // welcomeMessage et botName viennent de l'admin : échappés pour éviter toute injection HTML
     invite.innerHTML = `
-      <div id="aida-invite-avatar">${botName.charAt(0).toUpperCase()}</div>
+      <div id="aida-invite-avatar">${escapeHtml(botName.charAt(0).toUpperCase())}</div>
       <h3>Bienvenue 👋</h3>
-      <p>${welcomeMessage || "Comment puis-je vous aider ? Posez votre question ou découvrez ce que je peux faire pour vous."}</p>
+      <p>${escapeHtml(welcomeMessage || "Comment puis-je vous aider ? Posez votre question ou découvrez ce que je peux faire pour vous.")}</p>
       <div id="aida-invite-actions">
         <button id="aida-invite-primary">💬 Poser une question</button>
         <button id="aida-invite-secondary">✨ Découvrir</button>
@@ -1379,7 +1392,7 @@
   formEl.addEventListener("submit", async (e) => {
     e.preventDefault();
     const text = inputEl.value.trim();
-    if (!text) return;
+    if (!text || isStreaming) return; // pas d'envoi concurrent pendant un stream
 
     const invite = document.getElementById("aida-invite");
     if (invite) { fadeOutInvite(invite); hasShownInvite = true; }
@@ -1387,6 +1400,7 @@
     addMessage(text, "user");
     inputEl.value = "";
     sendBtn.disabled = true;
+    isStreaming = true;
     vibrate(15);
     /* Éveille le contexte audio pendant le geste utilisateur (nécessaire pour iOS Safari) */
     (function ensureAudio() {
@@ -1497,7 +1511,7 @@
           method: "POST",
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify({ message: text, sessionId, siteUrl: window.location.origin }),
-          signal: AbortSignal.timeout(8000),
+          signal: AbortSignal.timeout(60000), // 60 s : laisse le temps au LLM de répondre
         });
 
         if (retryRes.ok) {
@@ -1560,6 +1574,9 @@
       // Si la reconnexion SSE a échoué → fallback non-streaming
       if (!reconnected) {
         try {
+          // Retire l'éventuel message partiel déjà affiché (évite les doublons)
+          if (botMsgEl && botMsgEl.parentNode) botMsgEl.remove();
+          botMsgEl = null;
           if (typingEl.parentNode) {
             typingEl.innerHTML = "Récupération de la réponse...";
           }
@@ -1584,13 +1601,14 @@
         }
       }
     } finally {
-      sendBtn.disabled = false;
+      isStreaming = false;
+      sendBtn.disabled = !inputEl.value.trim();
       inputEl.focus();
     }
   });
 
   inputEl.addEventListener("input", () => {
-    sendBtn.disabled = !inputEl.value.trim();
+    sendBtn.disabled = !inputEl.value.trim() || isStreaming;
   });
   sendBtn.disabled = true;
 
