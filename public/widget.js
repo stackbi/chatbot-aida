@@ -1402,7 +1402,7 @@
       const res = await fetch(BACKEND_ORIGIN + "/api/chat/stream", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
-        body: JSON.stringify({ message: text, sessionId }),
+        body: JSON.stringify({ message: text, sessionId, siteUrl: window.location.origin }),
       });
 
       if (!res.ok) {
@@ -1410,7 +1410,7 @@
         const fallbackRes = await fetch(BACKEND_ORIGIN + "/api/chat", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, sessionId }),
+          body: JSON.stringify({ message: text, sessionId, siteUrl: window.location.origin }),
         });
         const fallbackData = await fallbackRes.json();
         typingEl.remove();
@@ -1496,7 +1496,7 @@
         const retryRes = await fetch(BACKEND_ORIGIN + "/api/chat/stream", {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify({ message: text, sessionId }),
+          body: JSON.stringify({ message: text, sessionId, siteUrl: window.location.origin }),
           signal: AbortSignal.timeout(8000),
         });
 
@@ -1567,7 +1567,7 @@
           const fbRes = await fetch(BACKEND_ORIGIN + "/api/chat", {
             method: "POST",
             headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ message: text, sessionId }),
+            body: JSON.stringify({ message: text, sessionId, siteUrl: window.location.origin }),
           });
           const fbData = await fbRes.json();
           if (typingEl.parentNode) typingEl.remove();

@@ -17,6 +17,7 @@ import {
 import { retrieveRelevantChunksSync, buildContextBlock } from "./lib/retrieval.js";
 import { ensureEmbeddingModel, generateEmbedding, findSimilarChunks } from "./lib/embedding.js";
 import { correctText } from "./lib/spellcheck.js";
+import { searchSiteContent, buildSiteContextBlock, isSafeSiteUrl } from "./lib/site-explorer.js";
 
 const require = createRequire(import.meta.url);
 const { PDFParse } = require("pdf-parse");
@@ -522,7 +523,7 @@ app.get("/api/admin/settings", requireAdmin, (req, res) => {
 });
 
 app.post("/api/admin/settings", requireAdmin, (req, res) => {
-  const { apiKey, openaiApiKey, groqApiKey, customApiUrl, customApiKey, customApiModel, model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily } = req.body;
+  const { apiKey, openaiApiKey, groqApiKey, customApiUrl, customApiKey, customApiModel, model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily, siteUrl, siteExploration } = req.body;
 
   // Construit le patch en ne conservant que les champs explicitement fournis
   const patch = {};
@@ -535,6 +536,9 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
   if (accentColor !== undefined) patch.accentColor = accentColor;
   if (accentColorDark !== undefined) patch.accentColorDark = accentColorDark;
   if (fontFamily !== undefined) patch.fontFamily = fontFamily;
+  // Exploration du site web (mode autonome)
+  if (siteUrl !== undefined) patch.siteUrl = siteUrl;
+  if (typeof siteExploration === "boolean") patch.siteExploration = siteExploration;
   // customApiUrl et customApiModel : mise à jour uniquement si explicitement fournis
   // Permet de vider le champ ("") pour désactiver l'API personnalisée
   if (customApiUrl !== undefined) patch.customApiUrl = customApiUrl;
@@ -780,7 +784,7 @@ app.delete("/api/admin/documents/:id", requireAdmin, (req, res) => {
 app.options("/api/chat", widgetCors);
 app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
   try {
-    const { message, sessionId } = req.body;
+    const { message, sessionId, siteUrl } = req.body;
     if (!message || typeof message !== "string") {
       return res.status(400).json({ error: "Message manquant" });
     }
@@ -813,13 +817,25 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       ? await generateEmbedding(message).catch(() => null)
       : null;
     let relevantChunks = [];
+    let usedVectorSearch = false;
     if (queryEmbedding) {
       relevantChunks = findSimilarChunks(queryEmbedding, chunkEntries, 4);
+      usedVectorSearch = relevantChunks.length > 0;
     }
     if (relevantChunks.length === 0) {
       relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
     }
-    const contextBlock = buildContextBlock(relevantChunks);
+    let contextBlock = buildContextBlock(relevantChunks);
+
+    // ⚡ Mode autonome : si le contexte RAG est insuffisant, explore le site web
+    let siteExplored = false;
+    if (!isContextSufficient(relevantChunks, usedVectorSearch)) {
+      const siteBlock = await getSiteContextBlock(settings, siteUrl, message);
+      if (siteBlock) {
+        contextBlock += siteBlock;
+        siteExplored = true;
+      }
+    }
 
     // 2. Historique (copie pour éviter toute mutation de l'objet en cache)
     const previous = conversations.get(effectiveSessionId);
@@ -878,6 +894,7 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     res.json({
       reply,
       sourcesUsed: relevantChunks.map((r) => r.title),
+      siteExplored,
       fallbackUsed: result.fallbackUsed,
       modelUsed: result.modelUsed
     });
@@ -902,7 +919,7 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
 
   let responseEnded = false;
   try {
-    const { message, sessionId } = req.body;
+    const { message, sessionId, siteUrl } = req.body;
     if (!message || typeof message !== "string") {
       res.write(`data: ${JSON.stringify({ error: "Message manquant" })}\n\n`);
       responseEnded = true;
@@ -937,13 +954,25 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
       : null;
     
     let relevantChunks = [];
+    let usedVectorSearch = false;
     if (queryEmbedding) {
       relevantChunks = findSimilarChunks(queryEmbedding, chunkEntries, 4);
+      usedVectorSearch = relevantChunks.length > 0;
     }
     if (relevantChunks.length === 0) {
       relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
     }
-    const contextBlock = buildContextBlock(relevantChunks);
+    let contextBlock = buildContextBlock(relevantChunks);
+
+    // ⚡ Mode autonome : si le contexte RAG est insuffisant, explore le site web
+    let siteExplored = false;
+    if (!isContextSufficient(relevantChunks, usedVectorSearch)) {
+      const siteBlock = await getSiteContextBlock(settings, siteUrl, message);
+      if (siteBlock) {
+        contextBlock += siteBlock;
+        siteExplored = true;
+      }
+    }
 
     // 2. Historique (copie pour éviter toute mutation de l'objet en cache)
     const previous = conversations.get(effectiveSessionId);
@@ -993,7 +1022,7 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
 
     // Signal de fin avec métadonnées
-    res.write(`data: ${JSON.stringify({ done: true, fullContent: fullReply, modelUsed: streamResult.modelUsed, fallbackUsed: streamResult.fallbackUsed, sourcesUsed: relevantChunks.map(r => r.title) })}\n\n`);
+    res.write(`data: ${JSON.stringify({ done: true, fullContent: fullReply, modelUsed: streamResult.modelUsed, fallbackUsed: streamResult.fallbackUsed, sourcesUsed: relevantChunks.map(r => r.title), siteExplored })}\n\n`);
     responseEnded = true;
     res.end();
   } catch (err) {
@@ -1032,7 +1061,45 @@ app.get("/api/widget-config", widgetCors, (req, res) => {
   });
 });
 
-// ─── Cache RAG : documents + chunks chargés en mémoire ────────────────
+// ─── Exploration autonome du site web ────────────────────────────────────
+// Quand le contexte RAG est insuffisant pour répondre, on explore le site du
+// client (celui où le widget est intégré) et on injecte les passages trouvés
+// dans le system prompt. Le site est crawlée une fois puis mis en cache.
+
+/**
+ * Détermine si le contexte RAG trouvé est suffisant pour répondre.
+ * Considéré insuffisant si :
+ *   - aucun passage pertinent n'a été trouvé, ou
+ *   - le meilleur score vectoriel est très faible (< 0.25).
+ */
+function isContextSufficient(relevantChunks, usedVectorSearch) {
+  if (!relevantChunks || relevantChunks.length === 0) return false;
+  if (usedVectorSearch && relevantChunks[0].score < 0.25) return false;
+  return true;
+}
+
+/**
+ * Explore le site web (si activé et autorisé) et renvoie le bloc de contexte.
+ * Renvoie "" silencieusement en cas d'échec (jamais bloquant).
+ */
+async function getSiteContextBlock(settings, siteUrl, message) {
+  if (settings.siteExploration === false) return "";
+  // L'URL configurée dans l'admin prime sur celle envoyée par le widget
+  // (le widget peut tourner en test depuis un autre domaine).
+  const target = (settings.siteUrl || siteUrl || "").trim();
+  if (!target || !isSafeSiteUrl(target)) return "";
+  try {
+    const matches = await searchSiteContent(target, message, 4);
+    if (!matches || matches.length === 0) return "";
+    console.log(`🌐 Exploration du site : ${matches.length} passages trouvés pour la question`);
+    return buildSiteContextBlock(matches);
+  } catch (err) {
+    console.warn("⚠️ Exploration du site échouée:", err.message);
+    return "";
+  }
+}
+
+// Cache RAG : documents + chunks chargés en mémoire ────────────────
 // Évite de relire data/store.json à chaque requête chat
 let ragCache = { documents: null, chunks: [], lastReload: 0 };
 const RAG_CACHE_TTL = 5000; // 5 secondes entre chaque rechargement

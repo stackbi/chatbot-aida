@@ -843,6 +843,32 @@
         </div>
       </div>
 
+      <!-- Exploration du site web -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">🌐</div>
+          <div class="card-header-text">
+            <h2>Exploration autonome du site</h2>
+            <p class="hint">Quand le contexte (base de connaissances) ne suffit pas à répondre, Aïda explore automatiquement votre site web pour y trouver l'information et répondre précisément.</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="set-siteexploration">Activer l'exploration du site</label>
+            <select id="set-siteexploration">
+              <option value="true">✅ Activée (recommandé)</option>
+              <option value="false">❌ Désactivée</option>
+            </select>
+            <div class="field-hint">L'IA consulte le site quand les documents ne contiennent pas la réponse.</div>
+          </div>
+          <div class="form-group">
+            <label for="set-siteurl">URL du site à explorer <span style="color:var(--text-muted);font-weight:400;">(optionnel)</span></label>
+            <input id="set-siteurl" type="text" placeholder="https://www.monsite.com" />
+            <div class="field-hint">Si vide, le site où le widget est intégré est détecté automatiquement (recommandé).</div>
+          </div>
+        </div>
+      </div>
+
       <!-- Design -->
       <div class="card">
         <div class="card-header">
@@ -1226,6 +1252,8 @@
       document.getElementById('set-botname').value = s.botName || '';
       document.getElementById('set-welcome').value = s.welcomeMessage || '';
       document.getElementById('set-systemprompt').value = s.systemPrompt || '';
+      document.getElementById('set-siteurl').value = s.siteUrl || '';
+      document.getElementById('set-siteexploration').value = s.siteExploration === false ? 'false' : 'true';
 
       document.getElementById('set-accentcolor').value = s.accentColor || '#6c63ff';
       document.getElementById('set-accentcolordark').value = s.accentColorDark || '#4a42cc';
@@ -1374,7 +1402,9 @@
         systemPrompt: document.getElementById('set-systemprompt').value,
         accentColor: document.getElementById('set-accentcolor').value,
         accentColorDark: document.getElementById('set-accentcolordark').value,
-        fontFamily: selectedFont
+        fontFamily: selectedFont,
+        siteUrl: document.getElementById('set-siteurl').value.trim(),
+        siteExploration: document.getElementById('set-siteexploration').value !== 'false'
       };
       const res = await apiFetch('/api/admin/settings', {
         method: 'POST',

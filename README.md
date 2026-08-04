@@ -213,6 +213,32 @@ Le RAG utilise 2 méthodes de recherche :
 Les passages pertinents sont injectés dans le prompt de l'IA avant chaque réponse,
 permettant au chatbot de répondre avec le contenu réel de ton site.
 
+### 🌐 Mode autonome : exploration du site web
+
+Quand le contexte RAG est **insuffisant** (aucun passage pertinent, ou score de
+pertinence très faible), l'IA explore **automatiquement le site web** où le widget
+est intégré pour y trouver la réponse :
+
+- Le widget transmet automatiquement l'URL du site (`window.location.origin`) à
+  chaque message — aucune configuration requise côté site.
+- Le backend crawl le site (même domaine, profondeur et nombre de pages limités),
+  extrait le texte lisible des pages et sélectionne les passages pertinents.
+- Les pages sont mises en cache 15 minutes pour éviter de recrawler à chaque question.
+- L'IA répond alors en s'appuyant sur le contenu réel du site, sans jamais le
+  mentionner à l'utilisateur (elle parle comme si elle connaissait l'information).
+
+**Configuration (optionnelle)** dans `/admin` → onglet **Paramètres** :
+
+| Champ | Description |
+|---|---|
+| **Exploration du site** | Activer / désactiver le mode autonome (activé par défaut) |
+| **URL du site à explorer** | Si vide, détection automatique du site d'intégration |
+
+> 🔒 **Sécurité** : le backend refuse de crawler les adresses locales ou privées
+> (localhost, 127.0.0.1, 10.x, 192.168.x, 169.254.x, etc.) pour éviter les
+> attaques SSRF. Pour les tests en local uniquement, définis
+> `ALLOW_LOCAL_SITE_CRAWL=1` dans les variables d'environnement.
+
 ---
 
 ## API — Routes publiques
