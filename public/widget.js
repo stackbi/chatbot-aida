@@ -1000,18 +1000,38 @@
   let welcomeShown = false;
   let suggestions = [];
   let suggestionsLoaded = false;
+  let conversationalSuggestionsEnabled = true; // mis à jour via /api/widget-config
   let welcomeMessage = "";
   let botName = "Aïda";
   let isStreaming = false; // bloque les envois concurrents pendant un stream
 
   // ─── Suggestions ─────────────────────────────────────────────────────────
-  const suggestionsPromise = fetch(BACKEND_ORIGIN + "/api/widget-suggestions")
-    .then((r) => r.json())
-    .then((data) => {
-      suggestions = data.suggestions || [];
+  // Recharge les suggestions initiales avec cache-busting (?v=Date.now()).
+  // Met à jour la liste et rafraîchit les chips affichées si le serveur
+  // signale un changement (l'admin a ajouté/modifié/supprimé un document).
+  let suggestionsSignature = "";
+
+  async function refreshInitialSuggestions() {
+    try {
+      const res = await fetch(BACKEND_ORIGIN + "/api/widget-suggestions?v=" + Date.now());
+      const data = res.ok ? await res.json() : null;
+      const list = data && Array.isArray(data.suggestions) ? data.suggestions : [];
+      const sig = (data && data.suggestionsSignature) || "";
+      const changed = sig && sig !== suggestionsSignature;
+      suggestions = list;
+      suggestionsSignature = sig || suggestionsSignature;
       suggestionsLoaded = true;
-    })
-    .catch(() => { suggestionsLoaded = true; });
+      // Chips visibles + liste modifiée + suggestions dynamiques DÉSACTIVÉES
+      // (sinon les chips affichées proviennent de la conversation) → mise à jour
+      if (changed && !conversationalSuggestionsEnabled && document.getElementById("aida-suggestions")) {
+        showSuggestionChips(list);
+      }
+    } catch {
+      suggestionsLoaded = true;
+    }
+  }
+
+  const suggestionsPromise = refreshInitialSuggestions();
 
   // Associe un emoji pertinent à une question selon son contenu
   function suggestIcon(question) {
@@ -1029,14 +1049,18 @@
     return "💬";
   }
 
-  function showSuggestionChips() {
+  function showSuggestionChips(list) {
+    // `list` optionnel : suggestions dynamiques (basées sur la conversation)
+    // si fournies, sinon repli sur les suggestions initiales de la base.
+    const items = list && list.length ? list : suggestions;
+
     const old = document.getElementById("aida-suggestions");
     if (old) {
       // Transition de sortie avant suppression
       old.classList.add("aida-suggestions-exit");
       setTimeout(() => old.remove(), 220);
     }
-    if (!suggestions || suggestions.length === 0) return;
+    if (!items || items.length === 0) return;
 
     const container = document.createElement("div");
     container.id = "aida-suggestions";
@@ -1047,7 +1071,7 @@
     label.textContent = "Suggestions";
     container.appendChild(label);
 
-    suggestions.forEach((q, i) => {
+    items.forEach((q, i) => {
       const chip = document.createElement("button");
       // q provient du contenu des documents (admin) : échappé pour éviter toute injection HTML
       chip.innerHTML = `<span class="aida-chip-icon">${suggestIcon(q)}</span><span>${escapeHtml(q)}</span>`;
@@ -1061,6 +1085,32 @@
       container.appendChild(chip);
     });
     messagesEl.parentNode.insertBefore(container, messagesEl.nextSibling);
+  }
+
+  // ─── Suggestions dynamiques (basées sur la conversation) ─────────────
+  // Après chaque réponse, on demande au serveur des questions de SUITE,
+  // adaptées au dernier échange, puis on remplace les chips affichées.
+  // Garde anti-course : si le visiteur envoie un nouveau message pendant que
+  // le fetch est en vol, seules les suggestions du DERNIER échange s'affichent.
+  let suggestionsRequestSeq = 0;
+  async function fetchConversationSuggestions(text) {
+    // Option admin désactivée → on garde les suggestions initiales affichées,
+    // sans aucun appel réseau supplémentaire après chaque réponse.
+    if (!conversationalSuggestionsEnabled) return;
+    const seq = ++suggestionsRequestSeq;
+    try {
+      const res = await fetch(BACKEND_ORIGIN + "/api/chat/suggestions", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ message: text, sessionId, siteUrl: window.location.origin }),
+      });
+      const data = res.ok ? await res.json() : null;
+      const list = data && Array.isArray(data.suggestions) ? data.suggestions : [];
+      if (seq === suggestionsRequestSeq) showSuggestionChips(list);
+    } catch {
+      // Échec réseau → repli sur les suggestions initiales (si toujours à jour)
+      if (seq === suggestionsRequestSeq) showSuggestionChips(null);
+    }
   }
 
   // ─── Fonction d'animation de sortie de l'invite ─────────────────────────
@@ -1308,37 +1358,72 @@
   }
 
   // ─── Chargement de la config (nom, message d'accueil, couleurs, police) ──
+  // Applique la config au widget. `configSignature` (hash côté serveur) permet
+  // de ne réappliquer les réglages que lorsque l'admin a réellement modifié
+  // quelque chose — évite les écritures DOM inutiles à chaque rafraîchissement.
+  let widgetConfigSignature = "";
+
+  function applyWidgetConfig(cfg) {
+    if (!cfg) return false;
+    widgetConfigSignature = cfg.configSignature || widgetConfigSignature;
+
+    botName = cfg.botName || botName;
+    if (cfg.welcomeMessage !== undefined) welcomeMessage = cfg.welcomeMessage;
+    // Si l'admin a désactivé les suggestions dynamiques, le widget ne fait
+    // plus appel à /api/chat/suggestions après chaque réponse.
+    conversationalSuggestionsEnabled = cfg.conversationalSuggestions !== false;
+    botNameEl.textContent = botName;
+    avatarEl.textContent = botName.charAt(0).toUpperCase();
+    if (cfg.accentColor) document.documentElement.style.setProperty("--aida-accent", cfg.accentColor);
+    if (cfg.accentColorDark) document.documentElement.style.setProperty("--aida-accent-dark", cfg.accentColorDark);
+    if (cfg.fontFamily && cfg.fontFamily !== "system-ui" && cfg.fontFamily !== "inherit") {
+      const fontName = cfg.fontFamily;
+      // Vérifie si cette Google Font n'est pas déjà chargée
+      const existingLinks = document.querySelectorAll('link[rel="stylesheet"][href*="fonts.googleapis.com"]');
+      let alreadyLoaded = false;
+      existingLinks.forEach((el) => {
+        if (el.href.includes(fontName.replace(/\s+/g, "+"))) alreadyLoaded = true;
+      });
+      if (!alreadyLoaded) {
+        const link = document.createElement("link");
+        link.rel = "stylesheet";
+        link.href = `https://fonts.googleapis.com/css2?family=${fontName.replace(/\s+/g, "+")}:wght@400;500;600;700&display=swap`;
+        document.head.appendChild(link);
+      }
+      document.documentElement.style.setProperty(
+        "--aida-font-family",
+        `"${fontName}", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`
+      );
+    }
+  }
+
+  // Recharge la config avec cache-busting (?v=Date.now()) : après un changement
+  // dans l'admin, les nouveaux réglages (dont le toggle des suggestions
+  // dynamiques) se propagent en ~1 minute au lieu de 5.
+  async function refreshWidgetConfig() {
+    try {
+      const res = await fetch(BACKEND_ORIGIN + "/api/widget-config?v=" + Date.now());
+      if (!res.ok) return;
+      applyWidgetConfig(await res.json());
+    } catch { /* silencieux : on réessaiera au prochain tick */ }
+  }
+
   fetch(BACKEND_ORIGIN + "/api/widget-config")
     .then((r) => r.json())
     .then((cfg) => {
-      botName = cfg.botName || "Aïda";
-      welcomeMessage = cfg.welcomeMessage || "";
-      botNameEl.textContent = botName;
-      avatarEl.textContent = botName.charAt(0).toUpperCase();
-      if (cfg.accentColor) document.documentElement.style.setProperty("--aida-accent", cfg.accentColor);
-      if (cfg.accentColorDark) document.documentElement.style.setProperty("--aida-accent-dark", cfg.accentColorDark);
-      if (cfg.fontFamily && cfg.fontFamily !== "system-ui" && cfg.fontFamily !== "inherit") {
-        const fontName = cfg.fontFamily;
-        // Vérifie si cette Google Font n'est pas déjà chargée
-        const existingLinks = document.querySelectorAll('link[rel="stylesheet"][href*="fonts.googleapis.com"]');
-        let alreadyLoaded = false;
-        existingLinks.forEach((el) => {
-          if (el.href.includes(fontName.replace(/\s+/g, "+"))) alreadyLoaded = true;
-        });
-        if (!alreadyLoaded) {
-          const link = document.createElement("link");
-          link.rel = "stylesheet";
-          link.href = `https://fonts.googleapis.com/css2?family=${fontName.replace(/\s+/g, "+")}:wght@400;500;600;700&display=swap`;
-          document.head.appendChild(link);
-        }
-        document.documentElement.style.setProperty(
-          "--aida-font-family",
-          `"${fontName}", -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif`
-        );
-      }
+      applyWidgetConfig(cfg);
       mountWidget();
     })
     .catch(() => { mountWidget(); });
+
+  // Rechargement périodique de la config ET des suggestions tant que la page
+  // est ouverte : les changements faits dans l'admin (réglages, documents)
+  // sont propagés en ~1 minute au lieu d'attendre l'expiration des caches.
+  // L'ID est conservé pour être annulé dans destroy() (nettoyage SPA).
+  const configPollInterval = setInterval(() => {
+    refreshWidgetConfig();
+    refreshInitialSuggestions();
+  }, 60000);
 
   // ─── Ouverture / Fermeture ────────────────────────────────────────────────
   function openChat() {
@@ -1347,6 +1432,9 @@
     launcher.classList.add("aida-hidden");
     document.body.style.overflow = "hidden";
 
+    // Propage immédiatement les réglages admin modifiés (cache-busting)
+    refreshWidgetConfig();
+
     // Focus sur l'input après l'animation d'ouverture
     setTimeout(() => { inputEl.focus(); }, 350);
 
@@ -1354,6 +1442,8 @@
       setTimeout(() => {
         (suggestionsLoaded ? Promise.resolve() : suggestionsPromise).then(() => {
           showInviteCard();
+          // Suggestions contextuelles dès l'ouverture pour engager la discussion
+          setTimeout(showSuggestionChips, 450);
           messagesEl.scrollTop = 0;
         });
       }, 400);
@@ -1431,6 +1521,8 @@
         if (fallbackRes.ok && fallbackData.reply) {
           addMessage(fallbackData.reply, "bot");
           playNotification();
+          // Suggestions de suivi basées sur la conversation
+          fetchConversationSuggestions(text);
         } else {
           addMessage(fallbackData.error || "Une erreur est survenue.", "error");
         }
@@ -1479,7 +1571,8 @@
             if (data.done) {
               if (botMsgEl) {
                 playNotification();
-                setTimeout(showSuggestionChips, 600);
+                // Suggestions dynamiques : régénérées selon la conversation en cours
+                fetchConversationSuggestions(text);
                 // Remplace le contenu affiché par la version finale normalisée
                 // par le serveur (espaces inter-mots rétablis, ponctuation corrigée).
                 if (data.fullContent) {
@@ -1556,7 +1649,8 @@
                   reconnected = true;
                   if (botMsgEl) {
                     playNotification();
-                    setTimeout(showSuggestionChips, 600);
+                    // Suggestions dynamiques : régénérées selon la conversation en cours
+                    fetchConversationSuggestions(text);
                     // Remplace le contenu affiché par la version finale normalisée
                     // par le serveur (espaces inter-mots rétablis, ponctuation corrigée).
                     if (d.fullContent) {
@@ -1592,6 +1686,8 @@
           if (fbRes.ok && fbData.reply) {
             addMessage(fbData.reply, "bot");
             playNotification();
+            // Suggestions de suivi basées sur la conversation
+            fetchConversationSuggestions(text);
           } else {
             addMessage(fbData.error || "Une erreur est survenue.", "error");
           }
@@ -1655,6 +1751,9 @@
 
     // Retire l'écouteur global keydown
     document.removeEventListener("keydown", onKeyDown);
+
+    // Arrête le rechargement périodique de la config/suggestions
+    if (configPollInterval) clearInterval(configPollInterval);
 
     // Ferme l'AudioContext s'il existe
     if (_audioCtx && _audioCtx.state !== "closed") {

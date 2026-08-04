@@ -47,10 +47,10 @@ app.use(helmet({
     directives: {
       defaultSrc: ["'self'"],
       scriptSrc: ["'self'", "'unsafe-inline'"],
-      styleSrc: ["'self'", "'unsafe-inline'"],
+      styleSrc: ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
       imgSrc: ["'self'", "data:", "blob:"],
       connectSrc: ["'self'"],
-      fontSrc: ["'self'", "data:"],
+      fontSrc: ["'self'", "data:", "https://fonts.gstatic.com"],
       formAction: ["'self'"],
       frameAncestors: ["*"],
       upgradeInsecureRequests: [],
@@ -513,6 +513,16 @@ const chatLimiter = rateLimit({
   legacyHeaders: false,
 });
 
+// Limiteur DÉDIÉ aux suggestions de suivi : ne partage pas le quota du chat
+// (sinon chaque échange consommerait 2 unités du même budget de 300/15 min).
+const chatSuggestionsLimiter = rateLimit({
+  windowMs: 15 * 60 * 1000,
+  limit: 300,
+  message: { error: "Trop de requêtes. Veuillez réessayer dans 15 minutes." },
+  standardHeaders: "draft-7",
+  legacyHeaders: false,
+});
+
 // ---------------------------------------------------------------------------
 // Middleware d'authentification admin — vérifie le mot de passe configuré.
 // Sécurisé pour la production : vérifie que le mot de passe est défini.
@@ -577,7 +587,7 @@ app.get("/api/admin/settings", requireAdmin, (req, res) => {
 });
 
 app.post("/api/admin/settings", requireAdmin, (req, res) => {
-  const { apiKey, openaiApiKey, groqApiKey, customApiUrl, customApiKey, customApiModel, model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily, siteUrl, siteExploration } = req.body;
+  const { apiKey, openaiApiKey, groqApiKey, customApiUrl, customApiKey, customApiModel, model, botName, welcomeMessage, systemPrompt, maxTokens, accentColor, accentColorDark, fontFamily, siteUrl, siteExploration, conversationalSuggestions } = req.body;
 
   // Construit le patch en ne conservant que les champs explicitement fournis
   const patch = {};
@@ -593,6 +603,8 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
   // Exploration du site web (mode autonome)
   if (siteUrl !== undefined) patch.siteUrl = siteUrl;
   if (typeof siteExploration === "boolean") patch.siteExploration = siteExploration;
+  // Suggestions dynamiques (régénérées selon la conversation en cours)
+  if (typeof conversationalSuggestions === "boolean") patch.conversationalSuggestions = conversationalSuggestions;
   // customApiUrl et customApiModel : mise à jour uniquement si explicitement fournis
   // Permet de vider le champ ("") pour désactiver l'API personnalisée
   if (customApiUrl !== undefined) patch.customApiUrl = customApiUrl;
@@ -625,7 +637,33 @@ app.post("/api/admin/settings", requireAdmin, (req, res) => {
   if (customApiKey && !customApiKey.includes("•")) patch.customApiKey = customApiKey;
 
   const updated = saveSettings(patch);
+  // Marque l'instant de la sauvegarde : l'indicateur admin compte les widgets
+  // qui reçoivent la nouvelle config À PARTIR de ce moment. Le journal est
+  // purgé pour repartir de zéro (évite tout sous-comptage).
+  lastConfigSaveTime = Date.now();
+  configDeliveryLog.length = 0;
   res.json({ ok: true, settings: { ...updated, apiKey: undefined, openaiApiKey: undefined, groqApiKey: undefined, customApiKey: undefined } });
+});
+
+// ---------------------------------------------------------------------------
+// Route admin : état de la propagation de la config vers les widgets
+// L'indicateur du tableau de bord affiche combien de widgets ont reçu la
+// nouvelle config depuis la dernière sauvegarde (et combien sont actifs).
+// ---------------------------------------------------------------------------
+app.get("/api/admin/widget-status", requireAdmin, (req, res) => {
+  const now = Date.now();
+  const sinceSave = lastConfigSaveTime
+    ? configDeliveryLog.filter((d) => d.t >= lastConfigSaveTime)
+    : [];
+  const recentIps = new Set(
+    configDeliveryLog.filter((d) => now - d.t < 5 * 60 * 1000).map((d) => d.ip)
+  );
+  res.json({
+    configSavedAt: lastConfigSaveTime || null,
+    deliveriesSinceSave: sinceSave.length,      // réceptions (un widget poll ~1/min)
+    widgetsSinceSave: new Set(sinceSave.map((d) => d.ip)).size, // widgets distincts
+    activeWidgets5m: recentIps.size
+  });
 });
 
 // ---------------------------------------------------------------------------
@@ -865,29 +903,36 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
       });
     }
 
-    // 1. Récupération du contexte pertinent (RAG vectoriel + mots-clés) via cache
-    const { documents, chunkEntries } = getRagContext();
-    const queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
-      ? await generateEmbedding(message).catch(() => null)
-      : null;
+    // 1. Contexte pertinent (RAG vectoriel + mots-clés + exploration du site)
+    //    Pour un simple « Bonjour » ou un message de politesse, on ne charge
+    //    AUCUN contexte : l'IA répond chaleureusement et engage la discussion
+    //    (évite le pitch de solutions immédiat et l'exploration inutile du site).
+    const conversational = isConversationalMessage(message);
+    let contextBlock = "";
     let relevantChunks = [];
     let usedVectorSearch = false;
-    if (queryEmbedding) {
-      relevantChunks = findSimilarChunks(queryEmbedding, chunkEntries, 4);
-      usedVectorSearch = relevantChunks.length > 0;
-    }
-    if (relevantChunks.length === 0) {
-      relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
-    }
-    let contextBlock = buildContextBlock(relevantChunks);
-
-    // ⚡ Mode autonome : si le contexte RAG est insuffisant, explore le site web
     let siteExplored = false;
-    if (!isContextSufficient(relevantChunks, usedVectorSearch)) {
-      const siteBlock = await getSiteContextBlock(settings, siteUrl, message);
-      if (siteBlock) {
-        contextBlock += siteBlock;
-        siteExplored = true;
+    if (!conversational) {
+      const { documents, chunkEntries } = getRagContext();
+      const queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
+        ? await generateEmbedding(message).catch(() => null)
+        : null;
+      if (queryEmbedding) {
+        relevantChunks = findSimilarChunks(queryEmbedding, chunkEntries, 4);
+        usedVectorSearch = relevantChunks.length > 0;
+      }
+      if (relevantChunks.length === 0) {
+        relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
+      }
+      contextBlock = buildContextBlock(relevantChunks);
+
+      // ⚡ Mode autonome : si le contexte RAG est insuffisant, explore le site web
+      if (!isContextSufficient(relevantChunks, usedVectorSearch)) {
+        const siteBlock = await getSiteContextBlock(settings, siteUrl, message);
+        if (siteBlock) {
+          contextBlock += siteBlock;
+          siteExplored = true;
+        }
       }
     }
 
@@ -981,7 +1026,12 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     try { res.write(payload); } catch { /* socket fermé */ }
   };
   const safeEnd = () => {
-    if (responseEnded || res.writableEnded || res.destroyed) return;
+    // NB : ne PAS tester `responseEnded` ici. Tous les appels placent
+    // `responseEnded = true` AVANT d'appeler safeEnd() : si ce flag était
+    // testé, res.end() ne serait JAMAIS appelé et la réponse SSE resterait
+    // ouverte indéfiniment — le widget attendrait la fin du flux pour
+    // réactiver la zone de saisie (blocage total après la 1ère question).
+    if (res.writableEnded || res.destroyed) return;
     try { res.end(); } catch { /* socket fermé */ }
   };
 
@@ -1014,30 +1064,36 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
       return safeEnd();
     }
 
-    // 1. Contexte RAG (avec cache intégré)
-    const { documents, chunkEntries } = getRagContext();
-    const queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
-      ? await generateEmbedding(message).catch(() => null)
-      : null;
-    
+    // 1. Contexte pertinent (RAG vectoriel + mots-clés + exploration du site)
+    //    Pour un simple « Bonjour » ou un message de politesse, on ne charge
+    //    AUCUN contexte : l'IA répond chaleureusement et engage la discussion
+    //    (évite le pitch de solutions immédiat et l'exploration inutile du site).
+    const conversational = isConversationalMessage(message);
+    let contextBlock = "";
     let relevantChunks = [];
     let usedVectorSearch = false;
-    if (queryEmbedding) {
-      relevantChunks = findSimilarChunks(queryEmbedding, chunkEntries, 4);
-      usedVectorSearch = relevantChunks.length > 0;
-    }
-    if (relevantChunks.length === 0) {
-      relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
-    }
-    let contextBlock = buildContextBlock(relevantChunks);
-
-    // ⚡ Mode autonome : si le contexte RAG est insuffisant, explore le site web
     let siteExplored = false;
-    if (!isContextSufficient(relevantChunks, usedVectorSearch)) {
-      const siteBlock = await getSiteContextBlock(settings, siteUrl, message);
-      if (siteBlock) {
-        contextBlock += siteBlock;
-        siteExplored = true;
+    if (!conversational) {
+      const { documents, chunkEntries } = getRagContext();
+      const queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
+        ? await generateEmbedding(message).catch(() => null)
+        : null;
+      if (queryEmbedding) {
+        relevantChunks = findSimilarChunks(queryEmbedding, chunkEntries, 4);
+        usedVectorSearch = relevantChunks.length > 0;
+      }
+      if (relevantChunks.length === 0) {
+        relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
+      }
+      contextBlock = buildContextBlock(relevantChunks);
+
+      // ⚡ Mode autonome : si le contexte RAG est insuffisant, explore le site web
+      if (!isContextSufficient(relevantChunks, usedVectorSearch)) {
+        const siteBlock = await getSiteContextBlock(settings, siteUrl, message);
+        if (siteBlock) {
+          contextBlock += siteBlock;
+          siteExplored = true;
+        }
       }
     }
 
@@ -1134,24 +1190,88 @@ app.get("/api/health", (req, res) => {
   });
 });
 
-// Le widget lit ces infos publiques (nom du bot, message d'accueil) au chargement
-// Mis en cache 5 minutes par le navigateur (la config change rarement)
+// ─── Suivi de la propagation de la config vers les widgets ─────────────
+// Les widgets rechargent /api/widget-config toutes les ~60 s (cache-busting).
+// On note chaque réception pour que l'admin puisse confirmer visuellement que
+// la nouvelle config a bien été reçue par des widgets connectés.
+let lastConfigSaveTime = 0;
+const configDeliveryLog = []; // [{ t: timestamp, ip }]
+const CONFIG_DELIVERY_MAX = 500;
+
+function recordWidgetConfigDelivery(req) {
+  const now = Date.now();
+  // IP HACHÉE (vie privée) : seuls des compteurs sont exposés côté admin,
+  // jamais l'adresse brute du visiteur.
+  configDeliveryLog.push({ t: now, ip: shortHash(req.ip || "inconnu") });
+  while (configDeliveryLog.length > CONFIG_DELIVERY_MAX) configDeliveryLog.shift();
+}
+
+// Le widget lit ces infos publiques (nom du bot, message d'accueil) au chargement.
+// Cache COURT (60 s) + ETag : après un changement dans l'admin, la nouvelle
+// config (dont le toggle des suggestions dynamiques) se propage en ~1 minute
+// au lieu de 5. Le widget force en plus le cache-busting (?v=Date.now()) à
+// chaque rechargement périodique.
 app.get("/api/widget-config", widgetCors, (req, res) => {
-  res.set("Cache-Control", "public, max-age=300");
+  recordWidgetConfigDelivery(req);
   const settings = getSettings();
-  res.json({
+  const config = {
     botName: settings.botName,
     welcomeMessage: settings.welcomeMessage,
     accentColor: settings.accentColor || "#2f6fed",
     accentColorDark: settings.accentColorDark || "#1f4fb8",
-    fontFamily: settings.fontFamily || "system-ui"
-  });
+    fontFamily: settings.fontFamily || "system-ui",
+    // Permet au widget d'éviter l'appel /api/chat/suggestions quand l'option
+    // est désactivée dans l'admin (économie d'une requête par réponse).
+    conversationalSuggestions: settings.conversationalSuggestions !== false
+  };
+  // Signature de la config : le widget la compare pour ne réappliquer les
+  // réglages que lorsque l'admin a réellement modifié quelque chose.
+  const signature = shortHash(JSON.stringify(config));
+  const etag = `"${signature}"`;
+  res.set("Cache-Control", "public, max-age=60, must-revalidate");
+  res.set("ETag", etag);
+  if (req.headers["if-none-match"] === etag) {
+    return res.status(304).end();
+  }
+  res.json({ ...config, configSignature: signature });
 });
 
 // ─── Exploration autonome du site web ────────────────────────────────────
 // Quand le contexte RAG est insuffisant pour répondre, on explore le site du
 // client (celui où le widget est intégré) et on injecte les passages trouvés
 // dans le system prompt. Le site est crawlée une fois puis mis en cache.
+
+/**
+ * Détecte les messages purement conversationnels (salutations, politesse,
+ * small talk) pour lesquels on ne charge pas de contexte RAG et on n'explore
+ * pas le site : un simple « Bonjour » ne doit pas déclencher un pitch de
+ * solutions, mais une réponse chaleureuse qui engage la discussion.
+ */
+function isConversationalMessage(message) {
+  const m = String(message || "")
+    .trim()
+    .toLowerCase()
+    .replace(/[’']/g, "'"); // normalise les apostrophes (typographique vs droite)
+  if (!m) return true;
+
+  const greeting = /\b(bonjour|bonsoir|salut|coucou|hello|hi|hey|yo|hola|rebonjour)\b/;
+  const smallTalk = /\b(merci|d'accord|daccord|ok|ça va|ca va|comment vas|comment allez|super|g[eé]nial|parfait|bien re[cç]u|a bient[oô]t|au revoir|bonne journ[eé]e)\b/;
+  // Toute trace d'une vraie demande — même polie (« Merci de… ») ou implicite
+  // (« Je veux savoir… », « Dites-moi… ») — doit être traitée avec le contexte.
+  // NB : \bo[uù] (avec limites de mot) et non « o[uù] » : sans les bornes, le
+  // « ou » de « bonjour », « beaucoup » ou « pour » serait pris pour le mot
+  // interrogatif « où », et toutes les salutations seraient mal classées.
+  const hasQuestionOrRequest = /\?|combien|quel|quelle|quels|quelles|comment|\bo[uù]|quand|pourquoi|qui |que |qu'est|qu’est|pouvez|pourriez|disponib|propos|proposez|tarif|prix|co[uû]t|aide|besoin|je voudrais|j'aimerais|je cherche|je souhaite|int[eé]ress|je veux|savoir|horaires|d'ouverture|ouvrez|dites-moi|dis-moi|indiquez|renseignez|pr[eé]cisez|envoyer|brochure|document|devis|rendez-vous|inscrire|commander|acheter|merci de|merci d'/.test(m);
+
+  if (hasQuestionOrRequest) return false;
+
+  // Un pur échange social (« Bonjour », « Merci ») est presque toujours bref :
+  // on limite le classement « conversationnel » aux messages courts pour ne
+  // jamais sauter le contexte sur une longue demande rédigée familièrement.
+  if (m.length > 50) return false;
+
+  return greeting.test(m) || smallTalk.test(m);
+}
 
 /**
  * Détermine si le contexte RAG trouvé est suffisant pour répondre.
@@ -1214,110 +1334,288 @@ function getRagContext() {
   return { documents: ragCache.documents, chunkEntries: ragCache.chunks };
 }
 
-// Cache pour les suggestions (regénéré toutes les 30s)
+// Cache pour les suggestions : générées avec l'IA toutes les 10 minutes,
+// ou immédiatement dès que la base de connaissances change.
 let suggestionsCache = [];
 let suggestionsCacheTime = 0;
-const SUGGESTIONS_CACHE_TTL = 30 * 1000;
+let suggestionsCacheKey = "";
+let suggestionsInFlight = null;  // promesse partagée : évite 2 appels LLM concurrents
+let suggestionsInFlightKey = "";
+const SUGGESTIONS_CACHE_TTL = 10 * 60 * 1000;
 
-app.get("/api/widget-suggestions", widgetCors, (req, res) => {
-  res.set("Cache-Control", "public, max-age=30");
+// Cache des suggestions DE SUIVI (conversationnelles), par session + message.
+const conversationSuggestionsCache = new Map();
+const convSuggestionsInFlight = new Map(); // promesses en cours (dédoublonnage)
+const CONV_SUGGESTIONS_TTL = 60 * 1000; // 60 s par échange
+const CONV_SUGGESTIONS_MAX_ENTRIES = 300;
+
+/** Petit hash stable pour la clé de cache des suggestions conversationnelles. */
+function shortHash(str) {
+  let h = 0;
+  for (let i = 0; i < str.length; i++) {
+    h = ((h << 5) - h + str.charCodeAt(i)) | 0;
+  }
+  return String(h >>> 0);
+}
+
+app.get("/api/widget-suggestions", widgetCors, async (req, res) => {
   const now = Date.now();
-  if (now - suggestionsCacheTime > SUGGESTIONS_CACHE_TTL) {
-    const documents = getDocuments();
-    suggestionsCache = generateSuggestions(documents);
+  let documents;
+  try {
+    documents = getDocuments();
+  } catch {
+    documents = [];
+  }
+  // Clé du cache : change dès qu'un document est ajouté/modifié/supprimé
+  const docsKey = documents.map((d) => `${d.id}:${(d.content || "").length}`).join("|");
+
+  if (now - suggestionsCacheTime > SUGGESTIONS_CACHE_TTL || suggestionsCacheKey !== docsKey) {
+    // Réutilise la génération en cours si elle porte sur les mêmes documents
+    if (suggestionsInFlight && suggestionsInFlightKey === docsKey) {
+      suggestionsCache = await suggestionsInFlight;
+    } else {
+      suggestionsInFlightKey = docsKey;
+      suggestionsInFlight = (async () => {
+        try {
+          return await generateContextualSuggestions(documents);
+        } catch (err) {
+          console.warn("⚠️ Génération des suggestions échouée:", err.message);
+          return generateSuggestionsFallback(documents);
+        }
+      })().finally(() => {
+        suggestionsInFlight = null;
+        suggestionsInFlightKey = "";
+      });
+      suggestionsCache = await suggestionsInFlight;
+    }
+    suggestionsCacheKey = docsKey;
     suggestionsCacheTime = now;
   }
-  res.json({ suggestions: suggestionsCache });
+
+  // Signature de la liste réellement affichée + ETag : le widget la compare pour
+  // détecter qu'un document a été ajouté/modifié/supprimé et mettre à jour ses
+  // chips, et le navigateur peut revalider en 304 sans re-télécharger le corps.
+  const signature = shortHash(JSON.stringify(suggestionsCache));
+  const etag = `"${signature}"`;
+  res.set("Cache-Control", "public, max-age=60, must-revalidate");
+  res.set("ETag", etag);
+  if (req.headers["if-none-match"] === etag) {
+    return res.status(304).end();
+  }
+  res.json({ suggestions: suggestionsCache, suggestionsSignature: signature });
+});
+
+// ---------------------------------------------------------------------------
+// Route publique : suggestions DE SUIVI (conversationnelles)
+// Générées selon le dernier échange (historique de session) ET la base de
+// connaissances, pour proposer au visiteur des questions qui poursuivent
+// naturellement la discussion — pas seulement le catalogue initial.
+// ---------------------------------------------------------------------------
+app.options("/api/chat/suggestions", widgetCors);
+app.post("/api/chat/suggestions", widgetCors, chatSuggestionsLimiter, async (req, res) => {
+  try {
+    const { message, sessionId } = req.body;
+    if (!message || typeof message !== "string") {
+      return res.status(400).json({ error: "Message manquant" });
+    }
+    const effectiveSessionId = sessionId || "anon-" + crypto.randomUUID();
+    const settings = getSettings();
+
+    // Option admin : suggestions dynamiques désactivées → liste vide, le widget
+    // retombe alors sur les suggestions initiales de la base de connaissances.
+    if (settings.conversationalSuggestions === false) {
+      return res.json({ suggestions: [] });
+    }
+
+    // Historique de la session (déjà sauvegardé par la route chat/stream,
+    // y compris la dernière réponse de l'assistante).
+    const previous = conversations.get(effectiveSessionId);
+    const history = previous ? previous.history.slice(-8) : [];
+
+    // Dédoublonnage : une seule génération par échange (session + message)
+    const cacheKey = `${effectiveSessionId}:${shortHash(message)}`;
+    const cached = conversationSuggestionsCache.get(cacheKey);
+    if (cached && Date.now() - cached.time < CONV_SUGGESTIONS_TTL) {
+      return res.json({ suggestions: cached.list });
+    }
+
+    // Promesse partagée : deux requêtes simultanées identiques ne déclenchent
+    // qu'UN SEUL appel LLM (motif identique au cache des suggestions initiales).
+    let inFlight = convSuggestionsInFlight.get(cacheKey);
+    if (!inFlight) {
+      inFlight = generateConversationalSuggestions(settings, message, history);
+      convSuggestionsInFlight.set(cacheKey, inFlight);
+      inFlight.finally(() => convSuggestionsInFlight.delete(cacheKey)).catch(() => {});
+    }
+    const suggestions = await inFlight;
+
+    conversationSuggestionsCache.set(cacheKey, { list: suggestions, time: Date.now() });
+    if (conversationSuggestionsCache.size > CONV_SUGGESTIONS_MAX_ENTRIES) {
+      conversationSuggestionsCache.clear();
+    }
+    res.json({ suggestions });
+  } catch (err) {
+    console.error("Erreur suggestions conversationnelles:", err);
+    res.json({ suggestions: [] });
+  }
 });
 
 /**
- * Analyse le contenu textuel d'un document pour en déduire le thème
- * et générer une suggestion de question pertinente.
- * N'utilise JAMAIS le titre du document.
+ * Génère des suggestions de questions CONTEXTUELLES, basées uniquement sur le
+ * contenu réel de la base de connaissances, via le modèle d'IA configuré.
+ * Plus aucun fallback générique du type « Quels sont vos tarifs ? » : chaque
+ * question proposée découle de ce que l'entreprise dit d'elle-même.
  */
-function guessSuggestionFromContent(content) {
-  if (!content || content.length < 30) return null;
+async function generateContextualSuggestions(documents) {
+  const settings = getSettings();
 
-  const c = content.toLowerCase();
-
-  // Comptage de mots-clés thématiques dans le contenu
-  const signals = {
-    contact:    (c.match(/t[eé]l[ée]phone|email|@|adresse|contacter|joindre|horaires?|ouverture|trouver|localisation|si[èe]ge|appeler|t[eé]l\b/gi) || []).length,
-    pricing:    (c.match(/prix|tarif|co[uû]t|forfait|€|euros|dollars|gratuit|abonnement|factur|paye?r|00[0-9]|€[0-9]|[0-9]€/gi) || []).length,
-    service:    (c.match(/service|prestation|offre|accompagnement|conseil|formation|diagnostic|audit|solution/gi) || []).length,
-    delivery:   (c.match(/livraison|exp[ée]dition|d[ée]lai|transport|colis|commande|envoi|r[ée]ception/gi) || []).length,
-    returns:    (c.match(/retour|remboursement|[ée]change|satisfait|r[ée]tractation|annulation/gi) || []).length,
-    guarantee:  (c.match(/garantie|SAV|apr[èe]s-vente|service client|assistance|support/gi) || []).length,
-    product:    (c.match(/produit|article|r[ée]f[ée]rence|catalogue|gamme|mod[èe]le|marque|collection/gi) || []).length,
-    company:    (c.match(/notre? entreprise|notre? soci[ée]t[ée]|qui sommes|[àa] propos|pr[ée]sentation|expertise|métier|activit[ée]s?/gi) || []).length,
-    faq:        (c.match(/question|r[ée]ponse|FAQ|f[ée]quentes/gi) || []).length,
-  };
-
-  // Trouve le thème dominant
-  let maxCount = 0;
-  let bestTheme = null;
-  for (const [theme, count] of Object.entries(signals)) {
-    if (count > maxCount) {
-      maxCount = count;
-      bestTheme = theme;
-    }
+  // Aucun contenu exploitable → amorces de discussion engageantes (on n'a
+  // aucune matière pour faire mieux ; pas de catalogue générique).
+  const contents = (documents || [])
+    .map((d) => d.content || "")
+    .filter((c) => c.trim().length > 20);
+  if (contents.length === 0) {
+    return [
+      "Bonjour, que pouvez-vous faire pour moi ?",
+      "Comment commence-t-on ?",
+      "Pouvez-vous me guider ?"
+    ];
   }
 
-  // Seuil minimum : au moins 2 occurrences du thème dominant
-  if (maxCount < 2) return null;
+  const providers = getFallbackProviders(settings);
+  if (providers.length === 0) return generateSuggestionsFallback(documents);
 
-  const suggestions = {
-    contact:   "Comment puis-je vous contacter ?",
-    pricing:   "Quels sont vos tarifs ?",
-    service:   "Quels sont vos services ?",
-    delivery:  "Quels sont les délais de livraison ?",
-    returns:   "Comment faire un retour ?",
-    guarantee: "Quelle est votre garantie ?",
-    product:   "Quels produits proposez-vous ?",
-    company:   "Pouvez-vous me présenter votre activité ?",
-    faq:       "Questions fréquentes"
-  };
+  const contextPreview = contents.join("\n\n---\n\n").slice(0, 6000);
+  const result = await tryProviderChain(providers, apiCall, {
+    messages: [
+      {
+        role: "system",
+        content:
+          "Tu es un expert en accueil de visiteurs. À partir du contenu de l'entreprise fourni, imagine 5 questions qu'un visiteur pourrait naturellement poser pour engager la conversation et trouver l'information dont il a besoin. " +
+          "Contraintes : questions courtes et naturelles (5 à 12 mots), formulées comme un visiteur réel, UNIQUEMENT fondées sur le contenu (produits, prix, contacts, délais, garanties, services…), et variées (pas 5 variantes du même sujet). " +
+          "INTERDIT les questions génériques qui conviendraient à n'importe quelle entreprise sans référence au contenu (ex. « Quels sont vos tarifs ? »). " +
+          "Renvoie UNIQUEMENT un tableau JSON de chaînes, sans texte avant ni après : [\"question 1\", \"question 2\", \"question 3\", \"question 4\", \"question 5\"]"
+      },
+      { role: "user", content: "Contenu de l'entreprise :\n\n" + contextPreview }
+    ],
+    maxTokens: 300
+  });
 
-  return suggestions[bestTheme] || null;
+  if (!result.ok) return generateSuggestionsFallback(documents);
+  const raw = result.data.choices?.[0]?.message?.content || "";
+  const parsed = parseSuggestionList(raw);
+  if (parsed.length === 0) return generateSuggestionsFallback(documents);
+  return parsed.slice(0, 6);
 }
 
-function generateSuggestions(documents) {
-  const defaults = [
-    "Quels sont vos services ?",
-    "Comment puis-je vous contacter ?",
-    "Quels sont vos tarifs ?",
-    "Pouvez-vous m'aider ?"
-  ];
+/**
+ * Parse la réponse de l'IA : JSON strict d'abord, puis extraction des lignes
+ * se terminant par un point d'interrogation.
+ */
+function parseSuggestionList(raw) {
+  if (!raw) return [];
+  const jsonMatch = raw.match(/\[[\s\S]*\]/);
+  if (jsonMatch) {
+    try {
+      const arr = JSON.parse(jsonMatch[0]);
+      if (Array.isArray(arr)) {
+        return arr
+          .map((s) => String(s).trim().replace(/^[-•*\d.\s]+/, ""))
+          .filter((s) => s.length > 4 && s.length < 120);
+      }
+    } catch { /* pas du JSON → extraction ligne par ligne */ }
+  }
+  return raw.split("\n")
+    .map((l) => l.trim().replace(/^[-•*\d.\s]+/, ""))
+    .filter((l) => l.endsWith("?") && l.length > 4 && l.length < 120);
+}
 
-  if (!documents || documents.length === 0) return defaults;
+/**
+ * Fallback sans IA : suggestions construites uniquement à partir du contenu
+ * des documents — questions littérales de la FAQ + phrases-clés factuelles.
+ * Jamais de questions génériques pré-écrites.
+ */
+function generateSuggestionsFallback(documents) {
+  const out = [];
+  const push = (q) => {
+    const t = String(q).trim();
+    if (t && t.length > 6 && t.length < 120 && !out.includes(t)) out.push(t);
+  };
 
-  const docSuggestions = [];
-  const pushIfNew = (item) => { if (!docSuggestions.includes(item)) docSuggestions.push(item); };
-
-  for (const doc of documents) {
+  for (const doc of documents || []) {
     const content = doc.content || "";
 
-    // Extrait les questions du contenu (naturelles, jamais un nom de fichier)
-    const questionLines = content.split("\n")
-      .map(l => l.trim())
-      .filter(l => l.endsWith("?") && l.length > 10 && l.length < 100);
-    for (const q of questionLines) {
-      pushIfNew(q);
-      if (docSuggestions.length >= 8) break;
+    // 1) Questions littérales présentes dans le contenu (FAQ naturelle)
+    for (const line of content.split("\n")) {
+      const l = line.trim();
+      if (l.endsWith("?") && l.length > 8 && l.length < 110) push(l);
+      if (out.length >= 6) break;
     }
 
-    // Suggestion basée sur l'analyse du contenu uniquement (pas du titre)
-    const guessed = guessSuggestionFromContent(content);
-    if (guessed) {
-      pushIfNew(guessed);
+    // 2) Phrases-clés factuelles → question engageante qui s'y réfère
+    if (out.length < 6) {
+      const sentences = content.split(/(?<=[.!?])\s+/).map((s) => s.trim()).filter(Boolean);
+      for (const s of sentences) {
+        if (s.length < 15 || s.length > 160) continue;
+        if (!/[0-9]|€|@|t[eé]l|horaire|livraison|garantie|tarif|prix|service|produit|offre/i.test(s)) continue;
+        const snippet = s.replace(/[.!?]+$/, "").trim().slice(0, 70);
+        push(`Pouvez-vous m'en dire plus sur ${snippet.charAt(0).toUpperCase()}${snippet.slice(1)} ?`);
+        if (out.length >= 6) break;
+      }
     }
 
-    if (docSuggestions.length >= 6) break;
+    if (out.length >= 6) break;
   }
 
-  // Fusion avec les suggestions par défaut
-  const all = [...new Set([...docSuggestions, ...defaults])];
-  return all.slice(0, 6);
+  return out.length ? out : [
+    "Bonjour, que pouvez-vous faire pour moi ?",
+    "Comment commence-t-on ?",
+    "Pouvez-vous me guider ?"
+  ];
+}
+
+/**
+ * Génère des suggestions DE SUIVI, adaptées au fil de la conversation en cours
+ * (pas seulement à la base de connaissances) : l'IA rebondit sur le dernier
+ * échange pour proposer des questions qui approfondissent naturellement le sujet.
+ */
+async function generateConversationalSuggestions(settings, lastMessage, history) {
+  const providers = getFallbackProviders(settings);
+  if (providers.length === 0) return [];
+
+  // Base de connaissances (pour ancrer les questions dans le concret)
+  const documents = getDocuments();
+  const contents = (documents || [])
+    .map((d) => d.content || "")
+    .filter((c) => c.trim().length > 20);
+  const kbContext = contents.join("\n\n---\n\n").slice(0, 4000);
+
+  // Fil conversationnel (les derniers échanges, le cas échéant)
+  const transcript = history.length
+    ? history.map((m) => `${m.role === "user" ? "Visiteur" : "Assistante"}: ${m.content}`).join("\n")
+    : `Visiteur: ${lastMessage}`;
+
+  const result = await tryProviderChain(providers, apiCall, {
+    messages: [
+      {
+        role: "system",
+        content:
+          "Tu es un expert en conversation. À partir de la discussion ci-dessous entre un visiteur et l'assistante d'une entreprise, imagine 4 questions que le visiteur pourrait naturellement poser ENSUITE pour poursuivre et approfondir l'échange. " +
+          "Contraintes : chaque question doit être une SUITE logique de la discussion (rebondir sur ce qui vient d'être dit, ne jamais répéter une question déjà posée), courte et naturelle (5 à 12 mots), et ancrée dans le contenu de l'entreprise fourni. " +
+          "INTERDIT les questions génériques ou hors sujet (ex. ne proposez pas « Quels sont vos tarifs ? » si la conversation porte sur les délais de livraison). " +
+          "Renvoie UNIQUEMENT un tableau JSON de chaînes, sans texte avant ni après : [\"question 1\", \"question 2\", \"question 3\", \"question 4\"]"
+      },
+      {
+        role: "user",
+        content: `Contenu de l'entreprise (pour ancrer les questions) :\n${kbContext || "(aucun)"}\n\n---\n\nDiscussion en cours :\n${transcript}`
+      }
+    ],
+    maxTokens: 300
+  });
+
+  if (!result.ok) return [];
+  const raw = result.data.choices?.[0]?.message?.content || "";
+  return parseSuggestionList(raw).slice(0, 4);
 }
 
 // ─── Arrêt gracieux (graceful shutdown) ─────────────────────────────────

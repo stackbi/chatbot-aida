@@ -402,6 +402,29 @@
     color: var(--success);
     font-weight: 500;
   }
+  .propagation-chip {
+    font-size: 0.78rem;
+    font-weight: 600;
+    padding: 5px 12px;
+    border-radius: 99px;
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    border: 1px solid var(--surface-border-light);
+    background: var(--surface);
+    color: var(--text-muted);
+    white-space: nowrap;
+  }
+  .propagation-chip.ok {
+    background: var(--success-bg);
+    color: var(--success);
+    border-color: rgba(34, 197, 94, 0.35);
+  }
+  .propagation-chip.pending {
+    background: #fffbeb;
+    color: #b45309;
+    border-color: rgba(245, 158, 11, 0.4);
+  }
 
   /* Documents list */
   .doc-item {
@@ -838,7 +861,7 @@
           <div class="form-group">
             <label for="set-systemprompt">Instructions générales (system prompt)</label>
             <textarea id="set-systemprompt" rows="5"></textarea>
-            <div class="field-hint">Le contenu de la base de connaissances est ajouté automatiquement à la suite.</div>
+            <div class="field-hint">Guide la voix et le déroulé de la conversation (accueil chaleureux, clarification pas à pas, réponses factuelles). Le contenu de la base de connaissances est ajouté automatiquement à la suite.</div>
           </div>
         </div>
       </div>
@@ -865,6 +888,27 @@
             <label for="set-siteurl">URL du site à explorer <span style="color:var(--text-muted);font-weight:400;">(optionnel)</span></label>
             <input id="set-siteurl" type="text" placeholder="https://www.monsite.com" />
             <div class="field-hint">Si vide, le site où le widget est intégré est détecté automatiquement (recommandé).</div>
+          </div>
+        </div>
+      </div>
+
+      <!-- Suggestions de questions -->
+      <div class="card">
+        <div class="card-header">
+          <div class="card-icon">💡</div>
+          <div class="card-header-text">
+            <h2>Suggestions de questions</h2>
+            <p class="hint">Contrôle les questions proposées au visiteur pour faire avancer la discussion.</p>
+          </div>
+        </div>
+        <div class="form-grid">
+          <div class="form-group">
+            <label for="set-convsuggestions">Suggestions dynamiques (selon la conversation)</label>
+            <select id="set-convsuggestions">
+              <option value="true">✅ Activées (recommandé)</option>
+              <option value="false">❌ Désactivées</option>
+            </select>
+            <div class="field-hint">Après chaque réponse, les suggestions sont régénérées en fonction du dernier échange. Désactivées : seules les questions initiales basées sur la base de connaissances sont affichées.</div>
           </div>
         </div>
       </div>
@@ -918,6 +962,7 @@
       <div class="actions-row">
         <button class="btn btn-primary" id="save-settings-btn">💾 Enregistrer</button>
         <span class="save-status" id="save-settings-status"></span>
+        <span class="propagation-chip" id="propagation-indicator" title="Propagation de la config aux widgets connectés">🛰️ Widgets : —</span>
       </div>
     </div>
 
@@ -1025,6 +1070,7 @@
       document.getElementById('save-settings-btn').disabled = true;
       document.getElementById('save-settings-status').textContent = '⚠ Échec du chargement — actualise la page';
     }
+    refreshPropagationIndicator();
     loadDocuments();
   }
 
@@ -1254,6 +1300,7 @@
       document.getElementById('set-systemprompt').value = s.systemPrompt || '';
       document.getElementById('set-siteurl').value = s.siteUrl || '';
       document.getElementById('set-siteexploration').value = s.siteExploration === false ? 'false' : 'true';
+      document.getElementById('set-convsuggestions').value = s.conversationalSuggestions === false ? 'false' : 'true';
 
       document.getElementById('set-accentcolor').value = s.accentColor || '#6c63ff';
       document.getElementById('set-accentcolordark').value = s.accentColorDark || '#4a42cc';
@@ -1404,7 +1451,8 @@
         accentColorDark: document.getElementById('set-accentcolordark').value,
         fontFamily: selectedFont,
         siteUrl: document.getElementById('set-siteurl').value.trim(),
-        siteExploration: document.getElementById('set-siteexploration').value !== 'false'
+        siteExploration: document.getElementById('set-siteexploration').value !== 'false',
+        conversationalSuggestions: document.getElementById('set-convsuggestions').value !== 'false'
       };
       const res = await apiFetch('/api/admin/settings', {
         method: 'POST',
@@ -1415,6 +1463,9 @@
         await loadSettings();
         document.getElementById('save-settings-btn').disabled = false;
         setTimeout(() => (status.textContent = ''), 2500);
+        // Repasse l'indicateur en phase de propagation après la sauvegarde
+        lastPropagationSavedAt = null;
+        refreshPropagationIndicator();
       } else {
         status.textContent = 'Erreur lors de l\'enregistrement';
       }
@@ -1422,6 +1473,43 @@
       status.textContent = 'Erreur réseau';
     }
   });
+
+  // --- Indicateur de propagation de la config aux widgets ---
+  // Confirme visuellement que les widgets connectés ont reçu les derniers
+  // réglages (ils rechargent /api/widget-config toutes les ~60 s).
+  let lastPropagationSavedAt = null;
+  async function refreshPropagationIndicator() {
+    const el = document.getElementById('propagation-indicator');
+    if (!el) return;
+    try {
+      const res = await apiFetch('/api/admin/widget-status');
+      const s = await res.json();
+      const sinceSave = s.deliveriesSinceSave || 0;
+      const widgets = s.widgetsSinceSave || 0;
+      const active = s.activeWidgets5m || 0;
+      if (!s.configSavedAt) {
+        el.className = 'propagation-chip';
+        el.title = 'Aucune modification enregistrée récemment. Chaque visiteur reçoit automatiquement la config au chargement du widget.';
+        el.textContent = '🛰️ Widgets : —';
+        return;
+      }
+      if (s.configSavedAt !== lastPropagationSavedAt) {
+        // Nouvelle sauvegarde détectée → phase de propagation
+        lastPropagationSavedAt = s.configSavedAt;
+        el.className = 'propagation-chip pending';
+        el.title = 'Les widgets rechargent la config toutes les ~60 s : dès qu\'un visiteur charge le widget, il recevra la nouvelle config.';
+        el.textContent = '⏳ En attente de widgets connectés…';
+      }
+      if (sinceSave > 0) {
+        el.className = 'propagation-chip ok';
+        const actif = active ? ` · ${active} actif(s) (5 min)` : '';
+        el.title = `${sinceSave} réception(s) de la config depuis la dernière sauvegarde, par ${widgets} widget(s) distinct(s).${actif}`;
+        el.textContent = `✓ Config reçue par ${widgets || sinceSave} widget(s)${actif}`;
+      }
+    } catch { /* silencieux */ }
+  }
+  // Le poll des widgets est de ~60 s → l'indicateur est rafraîchi toutes les 10 s
+  setInterval(refreshPropagationIndicator, 10000);
 
   // --- Base de connaissances ---
   async function loadDocuments() {

@@ -142,17 +142,24 @@ Dans l'onglet **Paramètres**, tu peux personnaliser :
 
 ### Le system prompt par défaut
 
-Le prompt par défaut est conçu pour éviter les réponses génériques. Il suit 5 règles :
+Le prompt par défaut est conçu pour mener une **discussion naturelle, pas à pas**,
+tout en restant factuel et en évitant les réponses génériques :
 
-| Règle | Objectif |
+| Principe | Objectif |
 |---|---|
-| **#1** | Interdit les phrases passe-partout ("nous proposons divers services", "n'hésitez pas à nous contacter") |
-| **#2** | Chaque réponse doit reposer sur le contexte fourni (documents RAG) |
-| **#3** | Exige des informations spécifiques (chiffres, noms, prix) plutôt que du vague |
-| **#4** | Auto-vérification avant chaque réponse |
-| **#5** | Chaque réponse doit citer au moins une source du contexte |
+| **Engagement** | Salutations et prises de contact ("Bonjour"...) → réponse chaleureuse + une question ouverte. Jamais de pitch de solutions dès le premier message |
+| **Pas à pas** | Besoin vague → une question de clarification. Plusieurs étapes → présentées une par une, en laissant le visiteur choisir |
+| **Concret** | Chaque réponse repose sur le contexte fourni (documents RAG) avec des chiffres, noms et prix exacts |
+| **Anti-générique** | Interdit les phrases passe-partout ("nous proposons divers services", "n'hésitez pas à nous contacter") |
+| **Vérification** | Auto-vérification avant chaque réponse (contexte, langue, voix) |
+
+> 💡 Les messages purement conversationnels ("Bonjour", "Merci"...) ne déclenchent
+> ni recherche RAG ni exploration du site : Aïda répond chaleureusement et engage
+> la discussion. La recherche de contexte ne s'active que sur une vraie question.
 
 Le prompt est modifiable depuis l'admin → onglet **Paramètres** → **Instructions générales**.
+Si le prompt par défaut d'origine est encore enregistré, il est remplacé automatiquement
+par la nouvelle version au démarrage.
 
 ---
 
@@ -275,9 +282,29 @@ est intégré pour y trouver la réponse :
 |---|---|---|---|
 | `/api/chat` | POST | Envoyer un message (réponse complète) | Non |
 | `/api/chat/stream` | POST | Envoyer un message (streaming SSE) | Non |
-| `/api/widget-config` | GET | Config du widget (nom, couleurs, police) | 5 min |
-| `/api/widget-suggestions` | GET | Suggestions de questions | 30 s |
+| `/api/chat/suggestions` | POST | Suggestions de **suivi** générées selon la conversation en cours | 60 s par échange |
+| `/api/widget-config` | GET | Config du widget (nom, couleurs, police) — ETag | 60 s |
+| `/api/widget-suggestions` | GET | Suggestions initiales basées sur la base de connaissances — ETag | 60 s |
 | `/api/health` | GET | Health check | Non |
+
+> 💡 **Suggestions dynamiques** : à l'ouverture, le widget affiche des questions
+> issues de la base de connaissances. Après **chaque réponse**, elles sont
+> régénérées par l'IA en fonction du dernier échange : la discussion rebondit
+> naturellement (ex. après une question sur les prix → questions de suivi sur
+> les garanties, le paiement, les délais…), au lieu de répéter le même catalogue.
+> Ce comportement se désactive depuis `/admin` → **Paramètres** → **Suggestions de
+> questions** (les suggestions initiales de la base restent alors seules affichées).
+>
+> 🔄 **Propagation rapide** : le widget recharge la config ET les suggestions
+> toutes les ~60 s avec cache-busting (`?v=…`), et à chaque ouverture du chat.
+> Un changement fait dans l'admin (nom, couleurs, toggle…) ou l'ajout d'un
+> document dans la base de connaissances est donc visible en moins d'une minute,
+> sans attendre l'expiration des anciens caches.
+>
+> 🛰️ **Indicateur de propagation** : près du bouton **Enregistrer**, le tableau
+> de bord affiche un chip qui confirme que les widgets connectés ont bien reçu
+> la nouvelle config („Config reçue par N widget(s)“) et combien sont actifs sur
+> les 5 dernières minutes (`GET /api/admin/widget-status`).
 
 ---
 
