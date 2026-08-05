@@ -1,0 +1,48 @@
+# ─── Aïda Chatbot — Docker Compose (production) ──────────────────────────
+#
+#   cp .env.example .env        # définis ADMIN_PASSWORD (obligatoire)
+#   docker compose up -d --build
+#   docker compose ps           # attendre "healthy"
+#
+# Persistance : le volume nommé `aida-data` est monté sur /app/data, où le
+# serveur écrit store.json (clé API, paramètres) et les documents. Il survit
+# aux redémarrages, recréations de conteneur et mises à jour d'image.
+#   • docker compose down        → conserve le volume (données gardées)
+#   • docker compose down -v     → SUPPRIME le volume (données perdues)
+#
+# À l'arrêt, un message "✅ Stockage persistant…" dans les logs confirme que
+# le volume fonctionne (voir lib/store.js).
+
+services:
+  aida:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: aida-chatbot:latest
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      # Chemin du volume persistant — c'est ici que vivent les données.
+      DATA_DIR: /app/data
+      # Garde-fou : compose refuse de démarrer sans ADMIN_PASSWORD
+      # (le message s'affiche au lancement). Valeurs lues depuis .env ou l'environnement.
+      ADMIN_PASSWORD: ${ADMIN_PASSWORD:?copie .env.example vers .env et definis ADMIN_PASSWORD}
+      # À activer UNIQUEMENT derrière un reverse proxy (Nginx, Traefik…).
+      # En accès direct, laisser désactivé pour ne pas accepter de faux
+      # X-Forwarded-For :  TRUST_PROXY: "1"
+    env_file:
+      - path: .env
+        required: false   # les autres variables sont optionnelles
+    volumes:
+      - aida-data:/app/data
+    healthcheck:
+      test: ["CMD", "node", "-e", "fetch('http://127.0.0.1:'+(process.env.PORT||3000)+'/api/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"]
+      interval: 30s
+      timeout: 5s
+      start_period: 25s
+      retries: 3
+
+volumes:
+  aida-data:
+    name: aida-data

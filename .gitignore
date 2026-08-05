@@ -14,6 +14,8 @@ node_modules/
 # data/store.json contient la clé API en clair → ne JAMAIS commiter
 data/store.json
 data/*.json
+# Marqueur de détection de persistance (écrit à chaque démarrage)
+data/.aida-storage-marker
 !data/.gitkeep
 
 # ─── Scripts Python avec clés API (tests manuels) ─────────────

@@ -595,6 +595,33 @@
     to { transform: rotate(360deg); }
   }
 
+  /* ── Bannière stockage non persistant ── */
+  .storage-warning {
+    display: none;
+    align-items: flex-start;
+    gap: 10px;
+    padding: 14px 16px;
+    border-radius: var(--radius-sm);
+    background: #fffbeb;
+    border: 1px solid rgba(245, 158, 11, 0.4);
+    color: #92400e;
+    font-size: 0.82rem;
+    line-height: 1.55;
+    margin-bottom: 16px;
+    animation: test-in 0.3s cubic-bezier(0.16, 1, 0.3, 1);
+  }
+  .storage-warning code {
+    background: rgba(245, 158, 11, 0.18);
+    padding: 1px 5px;
+    border-radius: 4px;
+    font-size: 0.78rem;
+  }
+  .storage-warning strong {
+    display: block;
+    margin-bottom: 2px;
+    color: #78350f;
+  }
+
   /* ── Indicateur de modèle actif ── */
   .model-badge {
     display: inline-flex;
@@ -740,13 +767,22 @@
 
     <!-- ── Onglet Paramètres ── -->
     <div class="tab-panel active" id="tab-settings">
+      <!-- Bannière : stockage local non persistant (clé API effacée au redémarrage) -->
+      <div class="storage-warning" id="storage-warning">
+        <span style="font-size:1rem;flex-shrink:0;">⚠️</span>
+        <div>
+          <strong>Stockage non persistant</strong>
+          Votre clé API et vos documents risquent d'être effacés au prochain redémarrage du serveur : le dossier <code>data/</code> n'a pas survécu au dernier redémarrage. Montez un volume persistant sur <code>data/</code>, ou définissez la variable d'environnement <code>DATA_DIR</code> vers un volume persistant. Alternative : définissez vos clés via les variables d'environnement <code>OPENROUTER_API_KEY</code>, <code>GROQ_API_KEY</code>, <code>OPENAI_API_KEY</code> ou <code>CUSTOM_API_KEY</code> — elles survivent à tous les redémarrages.
+        </div>
+      </div>
+
       <!-- API Connection -->
       <div class="card">
         <div class="card-header">
           <div class="card-icon">🔌</div>
           <div class="card-header-text">
             <h2>Connexion API</h2>
-            <p class="hint">La clé API reste côté serveur et n'est jamais exposée aux visiteurs.</p>
+            <p class="hint">La clé API reste côté serveur et n'est jamais exposée aux visiteurs. Astuce persistance : si le stockage local n'est pas fiable sur votre plateforme, vous pouvez aussi définir la clé via la variable d'environnement <code style="background:var(--surface-hover);padding:1px 5px;border-radius:4px;">OPENROUTER_API_KEY</code> — elle survit aux redémarrages du serveur.</p>
           </div>
         </div>
         <div class="form-grid">
@@ -1236,6 +1272,10 @@
         settingsLoaded = false;
         return false;
       }
+
+      // Bannière de persistance : visible si le stockage n'a pas survécu au dernier redémarrage
+      const storageWarning = document.getElementById('storage-warning');
+      if (storageWarning) storageWarning.style.display = s.storagePersistent === false ? 'flex' : 'none';
 
       // Groq key
       document.getElementById('set-groq-apikey').value = '';

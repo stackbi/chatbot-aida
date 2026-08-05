@@ -1,0 +1,21 @@
+# Dépendances (re-installées dans l'image)
+node_modules/
+
+# Données locales & secrets — jamais dans l'image
+data/
+.env
+.env.*
+!*.example
+**/.env
+
+# Git & CI
+.git
+.github
+.gitignore
+
+# Logs, artefacts & dossiers locaux
+*.log
+mnt/
+tmp/
+.DS_Store
+*.tmp

@@ -226,8 +226,30 @@
 }
 #aida-close:hover { background: rgb(255 255 255 / .2); color: rgb(255 255 255 / .95); }
 #aida-close:active { transform: scale(0.92); }
+#aida-header-right { display: flex; align-items: center; gap: 8px; }
+/* Bouton « Réinitialiser la conversation » */
+#aida-reset {
+  width: 36px; height: 36px; min-width: 36px; min-height: 36px; border-radius: 50%;
+  background: rgb(255 255 255 / .1); border: none;
+  color: rgb(255 255 255 / .6); cursor: pointer;
+  display: flex; align-items: center; justify-content: center;
+  transition: all 0.2s ease; flex-shrink: 0;
+  touch-action: manipulation;
+}
+#aida-reset svg { width: 16px; height: 16px; }
+#aida-reset:hover { background: rgb(255 255 255 / .2); color: rgb(255 255 255 / .95); }
+#aida-reset:active { transform: scale(0.92); }
+#aida-reset:disabled { opacity: 0.35; cursor: default; transform: none; }
+/* État « prêt à confirmer » (2e clic requis) */
+#aida-reset.aida-reset-arm {
+  background: rgb(239 68 68 / .22);
+  color: #fca5a5;
+  border: 1px solid rgb(239 68 68 / .5);
+  animation: aida-msg-in 0.2s ease;
+}
+#aida-reset.aida-reset-arm:hover { background: rgb(239 68 68 / .38); color: #fff; }
 /* Supprime le flash gris sur mobile (WebKit) */
-#aida-close, #aida-send, #aida-suggestions button, #aida-invite-actions button, #aida-launcher, #aida-scroll-bottom {
+#aida-close, #aida-reset, #aida-send, #aida-suggestions button, #aida-invite-actions button, #aida-launcher, #aida-scroll-bottom {
   -webkit-tap-highlight-color: transparent;
 }
 
@@ -645,6 +667,7 @@
   #aida-bot-name { font-size: 0.9rem; }
   #aida-header-status { font-size: 0.68rem; }
   #aida-close { width: 36px; height: 36px; min-width: 36px; min-height: 36px; }
+  #aida-reset { width: 36px; height: 36px; min-width: 36px; min-height: 36px; }
   #aida-scroll-bottom { bottom: 76px; }
   #aida-messages { padding: 16px 24px; gap: 10px; }
   .aida-msg {
@@ -734,6 +757,7 @@
   #aida-bot-name { font-size: 0.9rem; }
   #aida-header-status { font-size: 0.68rem; }
   #aida-close { width: 36px; height: 36px; min-width: 36px; min-height: 36px; font-size: 0.92rem; }
+  #aida-reset { width: 36px; height: 36px; min-width: 36px; min-height: 36px; }
   #aida-scroll-bottom { bottom: 72px; }
   #aida-messages { padding: 16px 20px; gap: 10px; }
   .aida-msg {
@@ -816,6 +840,7 @@
   #aida-bot-name { font-size: 0.85rem; }
   #aida-header-status { font-size: 0.64rem; }
   #aida-close { width: 34px; height: 34px; min-width: 34px; min-height: 34px; font-size: 0.84rem; }
+  #aida-reset { width: 34px; height: 34px; min-width: 34px; min-height: 34px; }
   #aida-scroll-bottom { bottom: 64px; }
   #aida-messages { padding: 12px 16px; gap: 8px; }
   .aida-msg {
@@ -958,7 +983,12 @@
           <span id="aida-header-status">En ligne</span>
         </div>
       </div>
-      <button id="aida-close" aria-label="Fermer">✕</button>
+      <div id="aida-header-right">
+        <button id="aida-reset" aria-label="Réinitialiser la conversation" title="Réinitialiser la conversation">
+          <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6m3 0V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/><line x1="10" y1="11" x2="10" y2="17"/><line x1="14" y1="11" x2="14" y2="17"/></svg>
+        </button>
+        <button id="aida-close" aria-label="Fermer">✕</button>
+      </div>
     </div>
     <div id="aida-messages"></div>
     <form id="aida-form">
@@ -980,6 +1010,7 @@
   const sendBtn = win.querySelector("#aida-send");
   const botNameEl = win.querySelector("#aida-bot-name");
   const closeBtn = win.querySelector("#aida-close");
+  const resetBtn = win.querySelector("#aida-reset");
   const avatarEl = win.querySelector("#aida-avatar");
 
   // ─── Session ─────────────────────────────────────────────────────────────
@@ -1465,6 +1496,69 @@
   });
 
   closeBtn.addEventListener("click", closeChat);
+
+  // ─── Réinitialisation de la conversation ────────────────────────────────
+  // Deux clics pour confirmer : 1er clic → le bouton passe en état d'alerte
+  // (« prêt à confirmer »), 2e clic dans les 3 s → réinitialisation (serveur
+  // + affichage local). Le bouton est inactif pendant un streaming.
+  let resetArmed = false;
+  let resetArmTimer = null;
+  let lastResetAt = 0; // anti triple-clic : ignore les clics ~1 s après un reset
+
+  function disarmReset() {
+    resetArmed = false;
+    clearTimeout(resetArmTimer);
+    resetBtn.classList.remove("aida-reset-arm");
+    resetBtn.setAttribute("aria-label", "Réinitialiser la conversation");
+    resetBtn.setAttribute("aria-pressed", "false");
+    resetBtn.title = "Réinitialiser la conversation";
+  }
+
+  function resetChatUI() {
+    // Vide les messages affichés et revient à l'état d'accueil
+    messagesEl.innerHTML = "";
+    document.getElementById("aida-invite")?.remove();
+    document.getElementById("aida-suggestions")?.remove();
+    inputEl.value = "";
+    welcomeShown = false;
+    hasShownInvite = false;
+    pendingScrollCount = 0;
+    suggestionsRequestSeq++; // invalide les suggestions conversationnelles en vol
+    scrollToBottom();
+    showWelcomeMessage();
+    setTimeout(showSuggestionChips, 300);
+  }
+
+  async function resetConversation() {
+    try {
+      await fetch(BACKEND_ORIGIN + "/api/chat/reset", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ sessionId })
+      });
+    } catch {
+      // Échec réseau : on réinitialise quand même l'affichage local
+    }
+    lastResetAt = Date.now();
+    resetChatUI();
+    disarmReset();
+    inputEl.focus();
+  }
+
+  resetBtn.addEventListener("click", () => {
+    if (isStreaming) return; // jamais pendant une réponse en cours
+    if (!resetArmed) {
+      if (Date.now() - lastResetAt < 1200) return; // évite le ré-armement après un reset
+      resetArmed = true;
+      resetBtn.classList.add("aida-reset-arm");
+      resetBtn.setAttribute("aria-label", "Confirmer la réinitialisation ?");
+      resetBtn.setAttribute("aria-pressed", "true");
+      resetBtn.title = "Confirmer la réinitialisation ?";
+      resetArmTimer = setTimeout(disarmReset, 3000);
+      return;
+    }
+    resetConversation();
+  });
 
   // Fermeture au clic sur le backdrop
   overlay.addEventListener("click", (e) => {

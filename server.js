@@ -12,10 +12,11 @@ import {
   saveSettings,
   getDocuments,
   addDocument,
-  deleteDocument
+  deleteDocument,
+  isStoragePersistent
 } from "./lib/store.js";
 import { retrieveRelevantChunksSync, buildContextBlock } from "./lib/retrieval.js";
-import { ensureEmbeddingModel, generateEmbedding, findSimilarChunks } from "./lib/embedding.js";
+import { ensureEmbeddingModel, generateEmbedding, findSimilarChunks, cosineSimilarity } from "./lib/embedding.js";
 import { correctText } from "./lib/spellcheck.js";
 import { searchSiteContent, buildSiteContextBlock, isSafeSiteUrl } from "./lib/site-explorer.js";
 
@@ -491,6 +492,12 @@ async function callOpenRouterWithFallback({ apiKey, model, messages, maxTokens, 
 // (pour la prod : remplacer par Redis ou une base de données)
 const conversations = new Map();
 
+// Marqueur de réinitialisation par session : permet aux réponses en cours
+// (chat, stream, suggestions) de détecter qu'un « Réinitialiser la
+// conversation » a eu lieu PENDANT leur exécution, et de ne PAS recréer
+// l'historique / le cache que le reset vient d'effacer.
+const sessionResetMarkers = new Map(); // sessionId -> timestamp du dernier reset
+
 // Nettoie les conversations inactives toutes les 30 minutes
 const CONVERSATION_TTL = 30 * 60 * 1000; // 30 minutes sans activité
 setInterval(() => {
@@ -582,7 +589,10 @@ app.get("/api/admin/settings", requireAdmin, (req, res) => {
     hasGroqApiKey: !!settings.groqApiKey,
 
     customApiKey: maskKey(settings.customApiKey),
-    hasCustomApiKey: !!settings.customApiKey
+    hasCustomApiKey: !!settings.customApiKey,
+    // Faux si le dossier data/ n'a pas survécu au dernier redémarrage (stockage
+    // éphémère) : l'admin affiche alors une bannière d'avertissement.
+    storagePersistent: isStoragePersistent()
   });
 });
 
@@ -912,9 +922,10 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     let relevantChunks = [];
     let usedVectorSearch = false;
     let siteExplored = false;
+    let queryEmbedding = null;
     if (!conversational) {
       const { documents, chunkEntries } = getRagContext();
-      const queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
+      queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
         ? await generateEmbedding(message).catch(() => null)
         : null;
       if (queryEmbedding) {
@@ -937,13 +948,38 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     }
 
     // 2. Historique (copie pour éviter toute mutation de l'objet en cache)
+    // Marqueur anti-race : si un reset survient pendant l'appel LLM, on ne
+    // recrée pas l'historique que le reset vient d'effacer.
+    const resetMarkerAtStart = sessionResetMarkers.get(effectiveSessionId) || 0;
     const previous = conversations.get(effectiveSessionId);
     const previousHistory = previous ? previous.history : [];
-    const history = [...previousHistory, { role: "user", content: message }];
+
+    // 2bis. Changement de sujet : si le visiteur change totalement de sujet
+    // (ex. : du cloud au développement web), on RÉINITIALISE l'historique pour
+    // que l'IA s'adapte immédiatement, sans être polluée par les échanges
+    // précédents. Le contexte RAG reste celui de la question la plus récente.
+    let topicShifted = false;
+    let history;
+    if (previousHistory.length > 0 && !conversational) {
+      topicShifted = await detectTopicShift(message, previousHistory, queryEmbedding);
+      history = topicShifted
+        ? [{ role: "user", content: message }]
+        : [...previousHistory, { role: "user", content: message }];
+      if (topicShifted) {
+        console.log(`🔄 Changement de sujet détecté (session ${effectiveSessionId.slice(0, 12)}…) — historique réinitialisé`);
+      }
+    } else {
+      history = [...previousHistory, { role: "user", content: message }];
+    }
 
     // 3. Appel à l'API OpenRouter (compatible OpenAI)
+    // Si un changement de sujet a été détecté, on ajoute une consigne explicite
+    // pour que l'IA réponde à la nouvelle question sans référence à l'ancien sujet.
+    const systemContent =
+      (settings.systemPrompt || "") + contextBlock +
+      (topicShifted ? TOPIC_SHIFT_SYSTEM_NOTE : FOLLOW_LATEST_QUESTION_NOTE);
     const messages = [
-      { role: "system", content: (settings.systemPrompt || "") + contextBlock },
+      { role: "system", content: systemContent },
       ...history
     ];
 
@@ -986,9 +1022,12 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     reply = await correctText(reply);
     reply = normalizeSpacing(reply);
 
-    // Sauvegarde de la conversation uniquement en cas de succès de l'appel
-    const updatedHistory = [...history, { role: "assistant", content: reply }];
-    conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
+    // Sauvegarde de la conversation uniquement en cas de succès de l'appel.
+    // (Sauf si un reset est survenu pendant l'appel : l'historique reste vide.)
+    if (sessionResetMarkers.get(effectiveSessionId) === resetMarkerAtStart) {
+      const updatedHistory = [...history, { role: "assistant", content: reply }];
+      conversations.set(effectiveSessionId, { history: updatedHistory.slice(-HISTORY_MAX_TURNS), lastActivity: Date.now() });
+    }
 
     res.json({
       reply,
@@ -1073,9 +1112,10 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     let relevantChunks = [];
     let usedVectorSearch = false;
     let siteExplored = false;
+    let queryEmbedding = null;
     if (!conversational) {
       const { documents, chunkEntries } = getRagContext();
-      const queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
+      queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
         ? await generateEmbedding(message).catch(() => null)
         : null;
       if (queryEmbedding) {
@@ -1098,13 +1138,38 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     }
 
     // 2. Historique (copie pour éviter toute mutation de l'objet en cache)
+    // Marqueur anti-race : si un reset survient pendant l'appel LLM, on ne
+    // recrée pas l'historique que le reset vient d'effacer.
+    const resetMarkerAtStart = sessionResetMarkers.get(effectiveSessionId) || 0;
     const previous = conversations.get(effectiveSessionId);
     const previousHistory = previous ? previous.history : [];
-    const history = [...previousHistory, { role: "user", content: message }];
+
+    // 2bis. Changement de sujet : si le visiteur change totalement de sujet
+    // (ex. : du cloud au développement web), on RÉINITIALISE l'historique pour
+    // que l'IA s'adapte immédiatement, sans être polluée par les échanges
+    // précédents. Le contexte RAG reste celui de la question la plus récente.
+    let topicShifted = false;
+    let history;
+    if (previousHistory.length > 0 && !conversational) {
+      topicShifted = await detectTopicShift(message, previousHistory, queryEmbedding);
+      history = topicShifted
+        ? [{ role: "user", content: message }]
+        : [...previousHistory, { role: "user", content: message }];
+      if (topicShifted) {
+        console.log(`🔄 Changement de sujet détecté (session ${effectiveSessionId.slice(0, 12)}…) — historique réinitialisé`);
+      }
+    } else {
+      history = [...previousHistory, { role: "user", content: message }];
+    }
 
     // 3. Messages pour l'API
+    // Si un changement de sujet a été détecté, on ajoute une consigne explicite
+    // pour que l'IA réponde à la nouvelle question sans référence à l'ancien sujet.
+    const systemContent =
+      (settings.systemPrompt || "") + contextBlock +
+      (topicShifted ? TOPIC_SHIFT_SYSTEM_NOTE : FOLLOW_LATEST_QUESTION_NOTE);
     const messages = [
-      { role: "system", content: (settings.systemPrompt || "") + contextBlock },
+      { role: "system", content: systemContent },
       ...history
     ];
 
@@ -1159,11 +1224,14 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
       return safeEnd();
     }
 
-    // Sauvegarde de la conversation
+    // Sauvegarde de la conversation — uniquement si aucun reset n'a eu lieu
+    // pendant le stream (sinon l'historique doit rester vide).
     const rawReply = streamResult.fullContent || ""; // déjà filtré par apiCallStream
     const fullReply = normalizeSpacing(await correctText(rawReply));
-    const updatedHistory = [...history, { role: "assistant", content: fullReply }];
-    conversations.set(effectiveSessionId, { history: updatedHistory.slice(-20), lastActivity: Date.now() });
+    if (sessionResetMarkers.get(effectiveSessionId) === resetMarkerAtStart) {
+      const updatedHistory = [...history, { role: "assistant", content: fullReply }];
+      conversations.set(effectiveSessionId, { history: updatedHistory.slice(-HISTORY_MAX_TURNS), lastActivity: Date.now() });
+    }
 
     // Signal de fin avec métadonnées
     safeWrite(`data: ${JSON.stringify({ done: true, fullContent: fullReply, modelUsed: streamResult.modelUsed, fallbackUsed: streamResult.fallbackUsed, sourcesUsed: relevantChunks.map(r => r.title), siteExplored })}\n\n`);
@@ -1177,6 +1245,37 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
       safeEnd();
     }
   }
+});
+
+// ---------------------------------------------------------------------------
+// Route publique : réinitialisation de la conversation (bouton du widget)
+// Efface l'historique de session côté serveur pour repartir de zéro, ainsi
+// que les suggestions conversationnelles en cache de cette session.
+// ---------------------------------------------------------------------------
+app.options("/api/chat/reset", widgetCors);
+app.post("/api/chat/reset", widgetCors, chatLimiter, (req, res) => {
+  const { sessionId } = req.body;
+  if (!sessionId || typeof sessionId !== "string") {
+    return res.status(400).json({ error: "sessionId manquant" });
+  }
+
+  conversations.delete(sessionId);
+  // Marque le reset : toute réponse déjà en vol pour cette session (chat,
+  // stream, suggestions) détectera le changement et n'écrira pas.
+  sessionResetMarkers.set(sessionId, Date.now());
+
+  // Purge les suggestions DE SUIVI mises en cache pour cette session : après
+  // la réinitialisation, un ancien échange ne doit plus pouvoir ressortir ses
+  // questions de suivi.
+  const prefix = sessionId + ":";
+  for (const key of conversationSuggestionsCache.keys()) {
+    if (key.startsWith(prefix)) conversationSuggestionsCache.delete(key);
+  }
+  for (const key of convSuggestionsInFlight.keys()) {
+    if (key.startsWith(prefix)) convSuggestionsInFlight.delete(key);
+  }
+
+  res.json({ ok: true });
 });
 
 // Health check pour monitoring / load balancer
@@ -1272,6 +1371,161 @@ function isConversationalMessage(message) {
 
   return greeting.test(m) || smallTalk.test(m);
 }
+
+// ---------------------------------------------------------------------------
+// Changement de sujet dans la conversation
+// ---------------------------------------------------------------------------
+// Le visiteur doit pouvoir changer totalement de sujet en cours de route
+// (ex. : passer du cloud au développement web) sans que l'IA reste bloquée
+// sur l'ancien thème. Quand un changement de sujet est détecté, l'historique
+// de la session est réinitialisé et l'IA reçoit une consigne explicite de
+// répondre à la nouvelle question sans référence aux échanges précédents.
+// NB : les seuils sont calibrés sur le modèle d'embeddings actuel
+// (@huggingface/transformers, multilingue). Si le modèle change, recalibrer.
+const TOPIC_SIMILARITY_THRESHOLD = 0.50; // en dessous → sujets différents
+// Quand l'utilisateur dirige EXPLICITEMENT la conversation (« parlons de… »,
+// « autre chose : … »), on lui fait confiance : seul un sujet manifestement
+// identique (similarité ≥ 0.65, ex. « Parlons de vos tarifs en détail » juste
+// après « Quels sont vos tarifs ? ») est traité comme une continuation.
+const TOPIC_EXPLICIT_HINT_THRESHOLD = 0.65;
+const HISTORY_MAX_TURNS = 12; // fenêtre d'historique envoyée au modèle (avant : 20)
+
+// Ouvertures qui marquent une CONTINUATION de la discussion (suivi, précision,
+// rebond) : elles ne doivent JAMAIS être considérées comme un changement de sujet,
+// même si la similarité sémantique est faible (« Et pour un gros volume ? », …).
+const CONTINUATION_PREFIX = /^(et|et\s+si|et\s+pour|et\s+comment|et\s+avec|aussi|ensuite|sinon|d'ailleurs|d'accord|du\s+coup|en\s+fait|puis|et\s+en\s+plus|et\s+aussi)\b/i;
+
+// Formulations qui annoncent explicitement un changement de sujet
+const TOPIC_SHIFT_HINTS = [
+  /\bchange(?:ons|z|r)?\s+de\s+sujet\b/i,
+  /\bautre\s+sujet\b/i,
+  /\bpassons\s+(?:à|a)\s+autre\s+chose\b/i,
+  /^autre\s+chose\b|autre\s+chose\s*[:.]/i,
+  /\b(?:parlons|parlions|parler|discutons)\s+(?:maintenant|plutôt)?\s*(?:de|du|d')/i,
+  /\b(?:abordons|évoquons)\b/i,
+  /\bnouvelle\s+question\b/i,
+  /\bsans\s+rapport\b/i,
+  /\bhors\s+sujet\b/i,
+  /\b(?:j'aimerais|je\s+voudrais|je\s+veux)\s+(?:parler|aborder|poser\s+une\s+question)\s+de\b/i,
+  /\btotalement\s+diff[ée]rent\b/i,
+  /\bquestion\s+(?:totalement|compl[èe]tement)\s+diff[ée]rente\b/i
+];
+
+function hasExplicitTopicShiftHint(message) {
+  const m = String(message || "").toLowerCase();
+  return TOPIC_SHIFT_HINTS.some((re) => re.test(m));
+}
+
+// Mots-outils français exclus de la comparaison lexicale de repli
+const FRENCH_STOPWORDS = new Set([
+  "le", "la", "les", "un", "une", "des", "de", "du", "d", "et", "ou", "mais",
+  "donc", "or", "ni", "car", "pour", "avec", "dans", "sur", "sous", "que",
+  "qui", "quoi", "dont", "comment", "pourquoi", "quel", "quelle", "quels",
+  "quelles", "est", "sont", "etre", "vous", "votre", "vos", "nos",
+  "notre", "je", "tu", "il", "elle", "on", "nous", "ce", "cette", "ces",
+  "au", "aux", "en", "par", "plus", "moins", "tres", "bien", "pas", "ca",
+  "cela", "a", "à", "se", "sa", "son", "mes", "tes", "ses", "tout", "toute",
+  "tous", "toutes", "faire", "fait", "peut", "peuvent", "avoir", "chez", "vers"
+]);
+
+/**
+ * Repli lexical quand les embeddings sont indisponibles : deux messages qui ne
+ * partagent aucun mot significatif sont considérés comme des sujets différents.
+ */
+function lexicalOverlapIsLow(a, b) {
+  const tokens = (s) => {
+    const words = String(s).toLowerCase().replace(/[’']/g, "'").match(/[a-zàâäéèêëîïôöùûüç]+/g) || [];
+    return new Set(words.filter((w) => w.length > 2 && !FRENCH_STOPWORDS.has(w)));
+  };
+  const ta = tokens(a);
+  const tb = tokens(b);
+  if (ta.size === 0 || tb.size === 0) return false;
+  let inter = 0;
+  for (const w of ta) if (tb.has(w)) inter++;
+  const union = ta.size + tb.size - inter;
+  return union > 0 && inter / union < 0.12;
+}
+
+/**
+ * Détecte si le nouveau message du visiteur marque un changement total de sujet
+ * par rapport à la conversation en cours. Stratégies complémentaires :
+ *   1. signal explicite ("changeons de sujet", "passons à autre chose"…) ;
+ *   2. comparaison sémantique par embeddings (nouveau message vs dernier
+ *      message utilisateur ET dernière réponse) ;
+ *   3. repli lexical si les embeddings sont indisponibles.
+ *
+ * Retourne true si le visiteur a manifestement changé de sujet.
+ */
+async function detectTopicShift(message, previousHistory, precomputedEmbedding = null) {
+  if (!message || !previousHistory || previousHistory.length === 0) return false;
+  const userMsgs = previousHistory.filter((m) => m.role === "user");
+  const explicitHint = hasExplicitTopicShiftHint(message);
+
+  // Un signal explicite (« parlons de… », « autre chose : … ») peut être évalué
+  // dès le premier échange ; sinon il faut au moins 2 messages utilisateur pour
+  // comparer les sujets (évite de déclarer un changement sur la 1re vraie
+  // question après une salutation).
+  if (userMsgs.length < (explicitHint ? 1 : 2)) return false;
+
+  const lastUserMsg = userMsgs[userMsgs.length - 1].content || "";
+  const lastAssistant = [...previousHistory].reverse().find((m) => m.role === "assistant");
+  const lastAssistantMsg = lastAssistant ? lastAssistant.content || "" : "";
+
+  try {
+    // Réutilise l'embedding déjà calculé par le RAG quand il existe
+    // (économie d'une génération par message)
+    const embNew = precomputedEmbedding || (await generateEmbedding(message));
+    let simUser = null;
+    let simAssistant = null;
+    if (embNew) {
+      const embUser = await generateEmbedding(lastUserMsg);
+      if (embUser) simUser = cosineSimilarity(embNew, embUser);
+    }
+
+    if (explicitHint) {
+      // Signal explicite : on y fait confiance, SAUF si le message reste
+      // sémantiquement proche du sujet en cours (ex. « Parlons de vos tarifs »
+      // juste après une question sur les tarifs = continuation, pas un changement).
+      if (simUser === null) return true;
+      return simUser < TOPIC_EXPLICIT_HINT_THRESHOLD;
+    }
+
+    // Sans signal explicite : une phrase qui commence par un connecteur de
+    // suite (« Et… », « Aussi… ») est une continuation, jamais un changement.
+    if (CONTINUATION_PREFIX.test(message.trim())) return false;
+
+    if (simUser === null) return lexicalOverlapIsLow(message, lastUserMsg);
+    if (simUser >= TOPIC_SIMILARITY_THRESHOLD) return false;
+
+    // Décrochage par rapport à la question précédente : on vérifie aussi la
+    // réponse précédente. Calculée UNIQUEMENT ici (économie d'embeddings :
+    // ce cas est rare, la plupart des messages sont des continuations).
+    if (lastAssistantMsg) {
+      const embAssist = await generateEmbedding(lastAssistantMsg);
+      if (embAssist) simAssistant = cosineSimilarity(embNew, embAssist);
+    }
+    if (simAssistant === null) return true;
+    return simAssistant < TOPIC_SIMILARITY_THRESHOLD;
+  } catch {
+    // Embeddings indisponibles → repli lexical (ou confiance au signal explicite)
+    if (explicitHint) return true;
+    if (CONTINUATION_PREFIX.test(message.trim())) return false;
+    return lexicalOverlapIsLow(message, lastUserMsg);
+  }
+}
+
+// Consigne permanente : répondre à la question la plus récente, même si elle
+// change de sujet (contre l'effet « bloqué sur l'ancien thème »).
+const FOLLOW_LATEST_QUESTION_NOTE =
+  "\n\n« CONSIGNE : réponds UNIQUEMENT à la question la plus récente du visiteur." +
+  " Si elle porte sur un sujet différent des échanges précédents, réponds-y directement," +
+  " sans revenir sur les anciens sujets. Le contexte fourni correspond toujours à la question la plus récente. »";
+
+// Consigne renforcée injectée quand un changement de sujet est détecté
+const TOPIC_SHIFT_SYSTEM_NOTE =
+  "\n\n« IMPORTANT — CHANGEMENT DE SUJET : le visiteur vient de changer de sujet." +
+  " Réponds UNIQUEMENT à sa dernière question, comme si la conversation recommençait," +
+  " en t'appuyant sur le contexte fourni ci-dessus. Aucune référence aux échanges précédents. »";
 
 /**
  * Détermine si le contexte RAG trouvé est suffisant pour répondre.
@@ -1420,6 +1674,9 @@ app.post("/api/chat/suggestions", widgetCors, chatSuggestionsLimiter, async (req
     }
     const effectiveSessionId = sessionId || "anon-" + crypto.randomUUID();
     const settings = getSettings();
+    // Marqueur anti-race : si un reset survient pendant la génération,
+    // on n'écrase pas le cache que le reset vient de purger.
+    const resetMarkerAtStart = sessionResetMarkers.get(effectiveSessionId) || 0;
 
     // Option admin : suggestions dynamiques désactivées → liste vide, le widget
     // retombe alors sur les suggestions initiales de la base de connaissances.
@@ -1449,6 +1706,11 @@ app.post("/api/chat/suggestions", widgetCors, chatSuggestionsLimiter, async (req
     }
     const suggestions = await inFlight;
 
+    // Session réinitialisée pendant la génération → on renvoie une liste vide
+    // sans réécrire dans le cache purgé.
+    if (sessionResetMarkers.get(effectiveSessionId) !== resetMarkerAtStart) {
+      return res.json({ suggestions: [] });
+    }
     conversationSuggestionsCache.set(cacheKey, { list: suggestions, time: Date.now() });
     if (conversationSuggestionsCache.size > CONV_SUGGESTIONS_MAX_ENTRIES) {
       conversationSuggestionsCache.clear();

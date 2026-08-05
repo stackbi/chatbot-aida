@@ -59,11 +59,89 @@ qui tourne — pense à Railway, Render, ou Fly.io) :
 1. Pousse ce dossier sur un dépôt Git (GitHub, GitLab...).
 2. Connecte ce dépôt à Railway / Render / Fly.io.
 3. Configure la variable d'environnement `ADMIN_PASSWORD` sur la plateforme (mot de passe
-   fort, différent de celui de `.env.example`).
-4. **Monte un volume persistant sur le dossier `data/`** — sinon la config et la base de
-   connaissances seront effacées à chaque redéploiement. La plupart des plateformes
-   proposent cette option ("persistent volume" / "disk").
+   fort, différent de celui de `.env.example`).4. **Monte un volume persistant sur le dossier `data/`** — sinon la config (dont
+   la **clé API**) et la base de connaissances seront effacées à chaque redéploiement
+   ou redémarrage. La plupart des plateformes proposent cette option ("persistent
+   volume" / "disk"). Pas de volume possible ? Deux alternatives :
+   - définis `DATA_DIR` sur la plateforme pour pointer vers un chemin persistant ;
+   - ou définis tes clés via les variables d'environnement `OPENROUTER_API_KEY`,
+     `GROQ_API_KEY`, `OPENAI_API_KEY`, `CUSTOM_API_KEY` (elles persistent par nature).
+
+   > 🔍 **Détection automatique** : à chaque démarrage, le serveur vérifie si le
+   > dossier `data/` a survécu au redémarrage précédent. Si non (stockage éphémère),
+   > un avertissement s'affiche dans les logs ET dans le tableau de bord admin.
+
+   → Les instructions précises (Docker Compose, Railway, Render) sont dans la
+   section **Déployer en production — persistance garantie** ci-dessous.
 5. Note l'URL publique que la plateforme te donne, par exemple `https://mon-chatbot.up.railway.app`.
+
+---
+
+## Déployer en production — persistance garantie (Docker / Railway / Render)
+
+Le dépôt inclut désormais les fichiers de déploiement prêts à l'emploi :
+`Dockerfile`, `docker-compose.yml`, `.dockerignore` et `render.yaml`.
+
+> 🧭 **Comment vérifier que la persistance fonctionne** : après le 2ᵉ démarrage,
+> le serveur affiche dans les logs `✅ Stockage persistant confirmé` (ou `⚠️` si le
+> dossier est éphémère). La clé API et les documents vivent dans `DATA_DIR`
+> (défaut `./data`) ; il suffit de pointer cette variable vers un volume.
+
+### Option A — Docker Compose (auto-hébergement)
+
+```bash
+cp .env.example .env        # définis ADMIN_PASSWORD (obligatoire)
+docker compose up -d --build
+```
+
+- Le volume nommé **`aida-data`** est monté sur `/app/data` (= `DATA_DIR`) :
+  `store.json` (clé API, paramètres) et les documents y survivent aux
+  redémarrages, recréations de conteneur et mises à jour d'image.
+- `docker compose down` **conserve** le volume ; `docker compose down -v` le
+  **supprime** (données perdues — à n'utiliser qu'en test).
+- Le modèle d'embedding (~170 Mo) est pré-chargé **dans l'image** au build :
+  premier démarrage instantané, aucun téléchargement au premier message.
+- Vérification : `docker compose ps` → état `healthy`, puis `docker compose
+  logs` → `✅ Stockage persistant confirmé` après un redémarrage.
+
+### Option B — Railway
+
+1. Déploie le dépôt (Web service) et configure les variables :
+   `ADMIN_PASSWORD` et `TRUST_PROXY=1`.
+2. Dans l'onglet du service → **Volumes** → crée un volume avec le chemin de
+   montage **`/app/data`** (le volume est rattaché à l'environnement de
+   déploiement).
+3. Aucune autre configuration : le serveur utilise déjà `./data` comme défaut,
+   ce qui correspond à `/app/data` dans l'image.
+
+> ⚠️ Les volumes Railway sont disponibles à partir du plan **Hobby** (pas de
+> volume sur le plan gratuit).
+
+### Option C — Render
+
+**Via Blueprint (recommandé)** : commit `render.yaml` (fourni) à la racine du
+dépôt, puis sur render.com → **New → Blueprint** → choisis le dépôt. Le
+blueprint déclare un disque persistant monté à `/opt/aida-data` et configure
+`DATA_DIR` dessus automatiquement. Saisis `ADMIN_PASSWORD` à la création.
+
+**Via le dashboard** (équivalent manuel) :
+1. Déploie le dépôt (web service).
+2. Configure les variables : `ADMIN_PASSWORD`, `TRUST_PROXY=1` et
+   **`DATA_DIR=/opt/aida-data`**.
+3. Service → **Disks** → *Add Disk* → chemin de montage ` /opt/aida-data`.
+
+> ⚠️ Les disques Render sont disponibles à partir du plan **Starter** (pas de
+> disque sur le plan gratuit).
+
+### Cache du modèle d'embedding
+
+- **Docker** : le modèle est dans l'image (pré-chargé au build) — rien à faire.
+- **Railway / Render** : le cache du modèle vit dans
+  `node_modules/@huggingface/transformers/.cache` (chemin fixe, non redirigeable
+  par variable d'environnement dans transformers.js v4) et est **re-téléchargé à
+  chaque redéploiement** (~170 Mo). Ce n'est pas bloquant : le serveur télécharge
+  automatiquement au démarrage. Pour l'éviter, il est possible de monter un
+  volume supplémentaire sur ce chemin (même principe que `aida-data`).
 
 ---
 
@@ -156,6 +234,13 @@ tout en restant factuel et en évitant les réponses génériques :
 > 💡 Les messages purement conversationnels ("Bonjour", "Merci"...) ne déclenchent
 > ni recherche RAG ni exploration du site : Aïda répond chaleureusement et engage
 > la discussion. La recherche de contexte ne s'active que sur une vraie question.
+>
+> 🔀 **Changements de sujet** : le visiteur peut changer totalement de sujet en
+> cours de route (ex. : du cloud au développement web). Le serveur détecte le
+> changement de sujet (comparaison sémantique + signaux explicites comme
+> "passons à autre chose"), réinitialise l'historique de la session et ordonne à
+> l'IA de répondre à la nouvelle question sans référence aux échanges précédents,
+> en s'appuyant sur le contexte le plus récent.
 
 Le prompt est modifiable depuis l'admin → onglet **Paramètres** → **Instructions générales**.
 Si le prompt par défaut d'origine est encore enregistré, il est remplacé automatiquement
@@ -220,6 +305,11 @@ configurent dans `.env` en local ou dans les paramètres de la plateforme
 | `LANGTOOL_API_URL` | URL de l'API LanguageTool (peut pointer vers une instance auto-hébergée) | `https://api.languagetool.org/v2` |
 | `LANGTOOL_TIMEOUT` | Timeout de l'appel LanguageTool en millisecondes | `3000` |
 | `ALLOW_LOCAL_SITE_CRAWL` | Autorise l'exploration du site sur les adresses locales/privées (localhost, 127.0.0.1, 10.x…) — **uniquement pour les tests locaux**, jamais en production (risque SSRF) | désactivé |
+| `DATA_DIR` | Dossier où sont stockés `store.json` (paramètres + clés API) et les documents. À pointer vers un **volume persistant** sur les plateformes au système de fichiers éphémère (Railway, Render…) | `./data` |
+| `OPENROUTER_API_KEY` | Clé API OpenRouter **par variable d'environnement** : utilisée si aucune clé n'est enregistrée dans l'admin. Survit à tous les redémarrages, même sans volume persistant | — |
+| `GROQ_API_KEY` | Clé API Groq par variable d'environnement (même rôle que ci-dessus) | — |
+| `OPENAI_API_KEY` | Clé API OpenAI par variable d'environnement (même rôle que ci-dessus) | — |
+| `CUSTOM_API_KEY` | Clé de l'API personnalisée par variable d'environnement (même rôle que ci-dessus) | — |
 
 > 💡 **`TRUST_PROXY` et le rate limiting** : si tu déploies derrière un proxy (c'est le cas
 > par défaut sur Railway et Render), sans cette variable **toutes les requêtes partagent la
@@ -247,6 +337,17 @@ Le RAG utilise 2 méthodes de recherche :
 
 Les passages pertinents sont injectés dans le prompt de l'IA avant chaque réponse,
 permettant au chatbot de répondre avec le contenu réel de ton site.
+
+> 🛠️ **Stabilité à l'arrêt du serveur** : le projet utilise
+> `@huggingface/transformers` **v4** (`^4.2.0`), qui dépend nativement de
+> `onnxruntime-node@1.24.3`. C'est important : les versions antérieures de la
+> librairie native (1.21.x) contenaient un bug connu qui faisait **planter le
+> processus à l'arrêt** (SIGTERM/SIGINT) avec
+> `libc++abi: terminating … mutex lock failed: Invalid argument`. Le correctif est
+> monté en amont dans transformers v4 — **plus aucun override n'est nécessaire**
+> dans `package.json`. Ne rétrograde pas cette dépendance (en cas de passage à
+> yarn/pnpm, l'équivalent pour forcer une version serait `resolutions` /
+> `pnpm.overrides`).
 
 ### 🌐 Mode autonome : exploration du site web
 
@@ -283,6 +384,7 @@ est intégré pour y trouver la réponse :
 | `/api/chat` | POST | Envoyer un message (réponse complète) | Non |
 | `/api/chat/stream` | POST | Envoyer un message (streaming SSE) | Non |
 | `/api/chat/suggestions` | POST | Suggestions de **suivi** générées selon la conversation en cours | 60 s par échange |
+| `/api/chat/reset` | POST | Réinitialiser la conversation du visiteur (efface l'historique de sa session côté serveur) — utilisé par le bouton « Réinitialiser » du widget | Non |
 | `/api/widget-config` | GET | Config du widget (nom, couleurs, police) — ETag | 60 s |
 | `/api/widget-suggestions` | GET | Suggestions initiales basées sur la base de connaissances — ETag | 60 s |
 | `/api/health` | GET | Health check | Non |
@@ -340,10 +442,23 @@ npm run dev     # Démarre avec Nodemon (redémarrage auto)
 
 ---
 
-## Déploiement continu
+## Déploiement continu — garder le serveur éveillé (Render plan gratuit)
 
-Le projet inclut un workflow GitHub Actions (`daily-ping.yml`) qui ping l'URL
-toutes les 24h pour éviter la mise en veille sur Render (plan gratuit).
+Render (plan gratuit) met le service en veille après ~15 min sans trafic. Le
+workflow GitHub Actions `.github/workflows/daily-ping.yml` ping le endpoint
+`/api/health` **toutes les 10 minutes** (cron `*/10 * * * *`, UTC) pour empêcher
+la mise en veille, avec déclenchement manuel possible (`workflow_dispatch`).
+
+> ⚠️ **Limites à connaître** :
+> - GitHub Actions exécute les crons **au mieux** (léger retard possible) et
+>   **désactive** les workflows planifiés après **60 jours sans activité** sur
+>   le dépôt. Un retard ponctuel > 15 min laisse le serveur se mettre en veille
+>   (il se réveille au ping suivant — première réponse un peu plus lente).
+> - Le plan gratuit Render inclut **750 h/mois** : garder le service éveillé
+>   24/7 consomme ~720 h/mois — il peut se mettre en veille les derniers jours
+>   du mois. C'est le compromis du plan gratuit.
+> - Pour une couverture plus fiable, ajouter un moniteur externe gratuit
+>   (ex. UptimeRobot, ping toutes les 5 min) en complément du workflow.
 
 ---
 

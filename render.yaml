@@ -1,0 +1,33 @@
+# ─── Aïda Chatbot — Blueprint Render (déploiement avec disque persistant) ──
+#
+#  1. Commit ce fichier à la racine du dépôt.
+#  2. Sur render.com :  New → Blueprint  →  choisis le dépôt.
+#  3. Saisis ADMIN_PASSWORD lors de la création (secret).
+#
+#  Le disque persistant (`disk`) conserve data/store.json : la clé API et la
+#  base de connaissances survivent aux redéploiements et redémarrages.
+#
+#  ⚠️ Les disques persistants Render nécessitent un plan payant (Starter
+#  minimum) — pas de disque sur le plan gratuit.
+
+services:
+  - type: web
+    name: aida-chatbot
+    runtime: docker
+    plan: starter
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/health
+
+    # Disque persistant : monté à /opt/aida-data, pointé par DATA_DIR.
+    disk:
+      name: aida-data
+      mountPath: /opt/aida-data
+      sizeGB: 1
+
+    envVars:
+      - key: DATA_DIR
+        value: /opt/aida-data
+      - key: ADMIN_PASSWORD
+        sync: false          # secret, saisi à la création du blueprint
+      - key: TRUST_PROXY
+        value: "1"           # Render place un reverse proxy devant le conteneur

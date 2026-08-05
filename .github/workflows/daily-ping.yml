@@ -1,0 +1,22 @@
+name: Keep Render Awake
+
+on:
+  schedule:
+    # Toutes les 10 min (UTC) : Render (plan gratuit) met le service en veille
+    # après ~15 min sans trafic — un ping plus fréquent que ce délai l'empêche
+    # de s'endormir. GitHub Actions exécute les crons au mieux (léger retard possible).
+    - cron: '*/10 * * * *'
+  workflow_dispatch:
+
+jobs:
+  ping:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Ping Render
+        run: |
+          # /api/health : probe de liveness dédié (réponse légère, ~100 octets),
+          # bien plus léger que la page d'accueil. --max-time 120 laisse le temps
+          # à un réveil à froid éventuel (premier ping après une mise en veille).
+          curl --fail --silent --show-error --max-time 120 \
+            https://chatbot-aida.onrender.com/api/health > /dev/null
