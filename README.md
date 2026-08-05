@@ -310,6 +310,8 @@ configurent dans `.env` en local ou dans les paramètres de la plateforme
 | `GROQ_API_KEY` | Clé API Groq par variable d'environnement (même rôle que ci-dessus) | — |
 | `OPENAI_API_KEY` | Clé API OpenAI par variable d'environnement (même rôle que ci-dessus) | — |
 | `CUSTOM_API_KEY` | Clé de l'API personnalisée par variable d'environnement (même rôle que ci-dessus) | — |
+| `PUBLIC_URL` | URL publique du service (ex. `https://chatbot-aida.onrender.com`). Si définie, active l'**anti-veille intégré** : le serveur se ping lui-même sur `/api/health` toutes les 5 min pour empêcher la mise en veille des plans gratuits (Render…). Vide = désactivé | — |
+| `KEEP_AWAKE_INTERVAL_MS` | Intervalle du self-ping anti-veille en millisecondes | `300000` (5 min) |
 
 > 💡 **`TRUST_PROXY` et le rate limiting** : si tu déploies derrière un proxy (c'est le cas
 > par défaut sur Railway et Render), sans cette variable **toutes les requêtes partagent la
@@ -442,23 +444,48 @@ npm run dev     # Démarre avec Nodemon (redémarrage auto)
 
 ---
 
-## Déploiement continu — garder le serveur éveillé (Render plan gratuit)
+## Garder le serveur éveillé — anti-veille intégré (Render plan gratuit)
 
-Render (plan gratuit) met le service en veille après ~15 min sans trafic. Le
-workflow GitHub Actions `.github/workflows/daily-ping.yml` ping le endpoint
-`/api/health` **toutes les 10 minutes** (cron `*/10 * * * *`, UTC) pour empêcher
-la mise en veille, avec déclenchement manuel possible (`workflow_dispatch`).
+Render (plan gratuit) met le service en veille après ~15 min **sans trafic
+entrant**. Plutôt qu'un cron GitHub Actions ou un moniteur externe, Aïda
+embarque un **self-ping intégré** : le serveur se ping **lui-même** sur son
+URL publique (`/api/health`) **toutes les 5 minutes**. La requête traverse le
+reverse proxy de la plateforme, donc elle compte comme du **trafic entrant
+réel** et empêche la mise en veille — sans aucune dépendance externe.
 
-> ⚠️ **Limites à connaître** :
-> - GitHub Actions exécute les crons **au mieux** (léger retard possible) et
->   **désactive** les workflows planifiés après **60 jours sans activité** sur
->   le dépôt. Un retard ponctuel > 15 min laisse le serveur se mettre en veille
->   (il se réveille au ping suivant — première réponse un peu plus lente).
-> - Le plan gratuit Render inclut **750 h/mois** : garder le service éveillé
->   24/7 consomme ~720 h/mois — il peut se mettre en veille les derniers jours
->   du mois. C'est le compromis du plan gratuit.
-> - Pour une couverture plus fiable, ajouter un moniteur externe gratuit
->   (ex. UptimeRobot, ping toutes les 5 min) en complément du workflow.
+### Activation (2 minutes)
+
+1. Sur Render (ou Railway, etc.), ajoute la variable d'environnement :
+   `PUBLIC_URL=https://chatbot-aida.onrender.com` (l'URL publique du service).
+2. Redéploie. Au démarrage, le serveur affiche :
+   `⏰ Anti-veille actif : self-ping …/api/health toutes les 5 min`.
+
+Aucun autre fichier à configurer : le `render.yaml` fourni déclare déjà la
+variable `PUBLIC_URL` (à renseigner dans le dashboard). Localement, laisser
+`PUBLIC_URL` vide désactive l'anti-veille (inutile de se pinger soi-même).
+
+### Détails techniques
+
+- Intervalle : **5 min** par défaut (`KEEP_AWAKE_INTERVAL_MS`, en ms). Bien
+  sous le seuil de ~15 min de Render, avec une marge confortable.
+- Cible : `/api/health` (réponse ~1 ko, sans effet de bord ni coût IA).
+- Robustesse : timeout de 15 s, échecs **silencieux** (un simple warning
+  sporadique) — un ping raté ne fait jamais tomber le serveur, l'intervalle
+  suivant réessaie. Un échec au démarrage est normal (instance en cours de
+  montée) et n'affecte que le premier cycle.
+
+> ⚠️ **Limite à connaître** : le plan gratuit Render inclut **750 h/mois** —
+> garder le service éveillé 24/7 consomme ~720 h/mois, il peut donc se mettre
+> en veille les derniers jours du mois. C'est le compromis du plan gratuit.
+> Le self-ping ne change rien à ce budget d'heures ; il évite simplement la
+> mise en veille due à l'inactivité.
+>
+> 💡 **Hypothèse à vérifier** : l'anti-veille repose sur le fait que la
+> plateforme compte le trafic venant du service lui-même comme du trafic
+> entrant (c'est le cas sur Render et Railway, consensus communautaire).
+> Si un warning `Anti-veille : ping échoué` apparaît dans les logs, ou si le
+> service se met quand même en veille, complète avec un moniteur externe
+> gratuit (ex. UptimeRobot, ping toutes les 5 min).
 
 ---
 

@@ -1883,6 +1883,9 @@ async function generateConversationalSuggestions(settings, lastMessage, history)
 // ─── Arrêt gracieux (graceful shutdown) ─────────────────────────────────
 function shutdown(signal) {
   console.log(`\n${signal} reçu. Arrêt du serveur...`);
+  // Stop l'anti-veille : plus aucun self-ping pendant l'arrêt.
+  if (keepAwakeTimeout) clearTimeout(keepAwakeTimeout);
+  if (keepAwakeInterval) clearInterval(keepAwakeInterval);
   server.close(() => {
     console.log("Serveur arrêté.");
     process.exit(0);
@@ -1917,3 +1920,51 @@ const server = app.listen(PORT, () => {
   console.log(`Serveur démarré sur http://localhost:${PORT}`);
   console.log(`Tableau de bord admin : http://localhost:${PORT}/admin`);
 });
+
+// ─── Anti-veille intégré (Render, Railway… plans gratuits) ─────────────
+// Les plateformes PaaS (Render free tier, Railway…) mettent le service en
+// veille après ~15 min SANS TRAFIC ENTRANT. Plutôt qu'un cron externe
+// (GitHub Actions) ou un moniteur tiers (UptimeRobot), le serveur se ping
+// LUI-MÊME sur son URL publique : le trafic entrant régulier empêche la
+// mise en veille, sans aucune dépendance externe. La requête passe par le
+// reverse proxy de la plateforme → elle compte comme du trafic réel.
+// Activation : définir PUBLIC_URL (ex. https://chatbot-aida.onrender.com).
+const PUBLIC_URL = (process.env.PUBLIC_URL || "").replace(/\/+$/, "");
+const KEEP_AWAKE_INTERVAL_MS = Math.max(
+  Number(process.env.KEEP_AWAKE_INTERVAL_MS) || 5 * 60 * 1000,
+  5 * 1000 // garde-fou : jamais plus fréquent qu'une tentative toutes les 5 s
+);
+// Handles des timers : nettoyés à l'arrêt gracieux (shutdown) pour ne pas
+// laisser un self-ping en vol retarder server.close().
+let keepAwakeTimeout = null;
+let keepAwakeInterval = null;
+
+if (PUBLIC_URL) {
+  const intervalLabel = KEEP_AWAKE_INTERVAL_MS < 60000
+    ? `${Math.round(KEEP_AWAKE_INTERVAL_MS / 1000)} s`
+    : `${Math.round(KEEP_AWAKE_INTERVAL_MS / 60000)} min`;
+  console.log(`⏰ Anti-veille actif : self-ping ${PUBLIC_URL}/api/health toutes les ${intervalLabel}`);
+  let consecutiveFailures = 0;
+  const keepAwakePing = async () => {
+    try {
+      const res = await fetch(`${PUBLIC_URL}/api/health`, {
+        signal: AbortSignal.timeout(15000)
+      });
+      if (!res.ok) throw new Error(`HTTP ${res.status}`);
+      consecutiveFailures = 0;
+    } catch (err) {
+      // Un échec (réseau, instance en cours de démarrage…) ne doit JAMAIS
+      // faire échouer le serveur : le prochain intervalle réessaiera.
+      consecutiveFailures++;
+      if (consecutiveFailures === 1 || consecutiveFailures % 10 === 0) {
+        console.warn(`⏰ Anti-veille : ping échoué (${consecutiveFailures} consécutif(s)) — ${err.message}`);
+      }
+    }
+  };
+  // Premier ping après un court délai (laisse le temps au serveur de démarrer),
+  // puis toutes les KEEP_AWAKE_INTERVAL_MS.
+  keepAwakeTimeout = setTimeout(keepAwakePing, 30 * 1000);
+  keepAwakeInterval = setInterval(keepAwakePing, KEEP_AWAKE_INTERVAL_MS);
+} else {
+  console.log("ℹ️ Anti-veille désactivé (PUBLIC_URL non définie). Sur les plans gratuits, le service peut se mettre en veille après ~15 min d'inactivité.");
+}
