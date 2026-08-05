@@ -70,6 +70,11 @@ qui tourne — pense à Railway, Render, ou Fly.io) :
    > 🔍 **Détection automatique** : à chaque démarrage, le serveur vérifie si le
    > dossier `data/` a survécu au redémarrage précédent. Si non (stockage éphémère),
    > un avertissement s'affiche dans les logs ET dans le tableau de bord admin.
+   > La bannière de l'admin est **adaptée au cas réel** : stockage confirmé (aucune
+   > bannière), premier démarrage (info, rien n'a encore été perdu), clés fournies
+   > par variables d'environnement (info verte : elles survivent), ou stockage
+   > éphémère avec données (alerte). Sur Render free, les données du plan gratuit
+   > ne survivent pas aux redéploiements — voir la section dédiée ci-dessous.
 
    → Les instructions précises (Docker Compose, Railway, Render) sont dans la
    section **Déployer en production — persistance garantie** ci-dessous.
@@ -132,6 +137,27 @@ blueprint déclare un disque persistant monté à `/opt/aida-data` et configure
 
 > ⚠️ Les disques Render sont disponibles à partir du plan **Starter** (pas de
 > disque sur le plan gratuit).
+
+#### Render plan gratuit — pourquoi la bannière « Stockage non persistant » s'affiche
+
+Sur le plan gratuit de Render (et Railway), le système de fichiers du conteneur
+est **éphémère** : tout ce qui est écrit dans `data/` (clé API, documents) est
+effacé à chaque redéploiement, redémarrage ou mise en veille. Le serveur le
+détecte via son marqueur de persistance et l'admin affiche alors la bannière —
+c'est un **message réel, pas un bug** : sur ce plan, les données ne peuvent pas
+survivre sans volume.
+
+**Comment éviter de ressaisir les clés à chaque redéploiement ?**
+
+1. **Définis les clés dans les variables d'environnement** Render (c'est la
+   solution recommandée, gratuite et fiable) :
+   `OPENROUTER_API_KEY`, `GROQ_API_KEY`, `OPENAI_API_KEY`, `CUSTOM_API_KEY`.
+   Elles survivent à tous les redémarrages et redéploiements **par nature**.
+   → La bannière devient alors une simple info verte : « Clés sécurisées par
+   variables d'environnement ».
+2. Les **documents** (base de connaissances) ne survivent pas sur le plan
+   gratuit : pour les conserver, passe sur un plan avec disque (Starter+) ou
+   ré-importe-les après chaque déploiement.
 
 ### Cache du modèle d'embedding
 
@@ -303,14 +329,14 @@ configurent dans `.env` en local ou dans les paramètres de la plateforme
 | `SITE_URL` | Identification de l'application côté OpenRouter (`HTTP-Referer`) | — |
 | `SPELLCHECK_ENABLED` | Désactive le correcteur orthographique externe (LanguageTool). Utile si l'API tierce est indisponible ou si tu veux zéro latence. Valeurs : `false` (désactive), tout autre = actif | activé |
 | `LANGTOOL_API_URL` | URL de l'API LanguageTool (peut pointer vers une instance auto-hébergée) | `https://api.languagetool.org/v2` |
-| `LANGTOOL_TIMEOUT` | Timeout de l'appel LanguageTool en millisecondes | `3000` |
+| `LANGTOOL_TIMEOUT` | Timeout de l'appel LanguageTool en millisecondes (court par défaut pour ne jamais retarder la réponse) | `1500` |
 | `ALLOW_LOCAL_SITE_CRAWL` | Autorise l'exploration du site sur les adresses locales/privées (localhost, 127.0.0.1, 10.x…) — **uniquement pour les tests locaux**, jamais en production (risque SSRF) | désactivé |
 | `DATA_DIR` | Dossier où sont stockés `store.json` (paramètres + clés API) et les documents. À pointer vers un **volume persistant** sur les plateformes au système de fichiers éphémère (Railway, Render…) | `./data` |
 | `OPENROUTER_API_KEY` | Clé API OpenRouter **par variable d'environnement** : utilisée si aucune clé n'est enregistrée dans l'admin. Survit à tous les redémarrages, même sans volume persistant | — |
 | `GROQ_API_KEY` | Clé API Groq par variable d'environnement (même rôle que ci-dessus) | — |
 | `OPENAI_API_KEY` | Clé API OpenAI par variable d'environnement (même rôle que ci-dessus) | — |
 | `CUSTOM_API_KEY` | Clé de l'API personnalisée par variable d'environnement (même rôle que ci-dessus) | — |
-| `PUBLIC_URL` | URL publique du service (ex. `https://chatbot-aida.onrender.com`). Si définie, active l'**anti-veille intégré** : le serveur se ping lui-même sur `/api/health` toutes les 5 min pour empêcher la mise en veille des plans gratuits (Render…). Vide = désactivé | — |
+| `PUBLIC_URL` | URL publique du service (ex. `https://chatbot-aida.onrender.com`). Si définie, active l'**anti-veille intégré** : le serveur se ping lui-même sur `/api/keepalive` (réponse 204, ultra-légère) toutes les 5 min pour empêcher la mise en veille des plans gratuits (Render…). Vide = fallback sur `RENDER_EXTERNAL_URL` (auto sur Render) ; les deux vides = désactivé | — |
 | `KEEP_AWAKE_INTERVAL_MS` | Intervalle du self-ping anti-veille en millisecondes | `300000` (5 min) |
 
 > 💡 **`TRUST_PROXY` et le rate limiting** : si tu déploies derrière un proxy (c'est le cas
@@ -389,7 +415,8 @@ est intégré pour y trouver la réponse :
 | `/api/chat/reset` | POST | Réinitialiser la conversation du visiteur (efface l'historique de sa session côté serveur) — utilisé par le bouton « Réinitialiser » du widget | Non |
 | `/api/widget-config` | GET | Config du widget (nom, couleurs, police) — ETag | 60 s |
 | `/api/widget-suggestions` | GET | Suggestions initiales basées sur la base de connaissances — ETag | 60 s |
-| `/api/health` | GET | Health check | Non |
+| `/api/health` | GET | Health check (monitoring, load balancer) | Non |
+| `/api/keepalive` | GET | Keep-alive anti-veille — réponse vide `204`, le plus léger possible (utilisé par le self-ping du serveur) | Non |
 
 > 💡 **Suggestions dynamiques** : à l'ouverture, le widget affiche des questions
 > issues de la base de connaissances. Après **chaque réponse**, elles sont
@@ -449,26 +476,31 @@ npm run dev     # Démarre avec Nodemon (redémarrage auto)
 Render (plan gratuit) met le service en veille après ~15 min **sans trafic
 entrant**. Plutôt qu'un cron GitHub Actions ou un moniteur externe, Aïda
 embarque un **self-ping intégré** : le serveur se ping **lui-même** sur son
-URL publique (`/api/health`) **toutes les 5 minutes**. La requête traverse le
-reverse proxy de la plateforme, donc elle compte comme du **trafic entrant
+URL publique (`/api/keepalive`) **toutes les 5 minutes**. La requête traverse
+le reverse proxy de la plateforme, donc elle compte comme du **trafic entrant
 réel** et empêche la mise en veille — sans aucune dépendance externe.
 
-### Activation (2 minutes)
+### Activation — automatique sur Render
 
-1. Sur Render (ou Railway, etc.), ajoute la variable d'environnement :
-   `PUBLIC_URL=https://chatbot-aida.onrender.com` (l'URL publique du service).
-2. Redéploie. Au démarrage, le serveur affiche :
-   `⏰ Anti-veille actif : self-ping …/api/health toutes les 5 min`.
+**Aucune configuration nécessaire sur Render** : le `render.yaml` fourni fixe
+`PUBLIC_URL=https://chatbot-aida.onrender.com` (la valeur par défaut du
+service), et même si elle était vide, le serveur retomberait sur
+`RENDER_EXTERNAL_URL`, que Render injecte automatiquement sur chaque web
+service. L'anti-veille est donc **actif dès le premier déploiement via le
+Blueprint**. Au démarrage, le serveur affiche :
+`⏰ Anti-veille actif : self-ping …/api/keepalive toutes les 5 min`.
 
-Aucun autre fichier à configurer : le `render.yaml` fourni déclare déjà la
-variable `PUBLIC_URL` (à renseigner dans le dashboard). Localement, laisser
-`PUBLIC_URL` vide désactive l'anti-veille (inutile de se pinger soi-même).
+**Sur les autres plateformes** (Railway…) : définir manuellement la variable
+`PUBLIC_URL` (l'URL publique du service). Localement, laisser `PUBLIC_URL`
+vide désactive l'anti-veille (inutile de se pinger soi-même).
 
 ### Détails techniques
 
 - Intervalle : **5 min** par défaut (`KEEP_AWAKE_INTERVAL_MS`, en ms). Bien
   sous le seuil de ~15 min de Render, avec une marge confortable.
-- Cible : `/api/health` (réponse ~1 ko, sans effet de bord ni coût IA).
+- Cible : `/api/keepalive` — endpoint dédié, réponse **vide `204`**, sans
+  aucun calcul ni logique métier (encore plus léger que `/api/health`, qui
+  reste utilisé par les healthchecks d'infra).
 - Robustesse : timeout de 15 s, échecs **silencieux** (un simple warning
   sporadique) — un ping raté ne fait jamais tomber le serveur, l'intervalle
   suivant réessaie. Un échec au démarrage est normal (instance en cours de

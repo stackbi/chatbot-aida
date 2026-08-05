@@ -13,9 +13,10 @@ import {
   getDocuments,
   addDocument,
   deleteDocument,
-  isStoragePersistent
+  isStoragePersistent,
+  getStorageStatus
 } from "./lib/store.js";
-import { retrieveRelevantChunksSync, buildContextBlock } from "./lib/retrieval.js";
+import { retrieveRelevantChunksSync, buildChunkIndex, buildContextBlock } from "./lib/retrieval.js";
 import { ensureEmbeddingModel, generateEmbedding, findSimilarChunks, cosineSimilarity } from "./lib/embedding.js";
 import { correctText } from "./lib/spellcheck.js";
 import { searchSiteContent, buildSiteContextBlock, isSafeSiteUrl } from "./lib/site-explorer.js";
@@ -499,12 +500,26 @@ const conversations = new Map();
 const sessionResetMarkers = new Map(); // sessionId -> timestamp du dernier reset
 
 // Nettoie les conversations inactives toutes les 30 minutes
+// (purge aussi les marqueurs de reset des mêmes sessions : sans ce nettoyage,
+// sessionResetMarkers grossirait indéfiniment — fuite mémoire).
 const CONVERSATION_TTL = 30 * 60 * 1000; // 30 minutes sans activité
 setInterval(() => {
   const now = Date.now();
   for (const [sessionId, session] of conversations) {
     if (now - session.lastActivity > CONVERSATION_TTL) {
       conversations.delete(sessionId);
+      sessionResetMarkers.delete(sessionId);
+    }
+  }
+  // Purge aussi les marqueurs ORPHELINS : un « Réinitialiser la conversation »
+  // peut poser un marqueur pour une session qui n'a (encore) aucune conversation
+  // (ex. reset sur une session fraîche). Ces marqueurs n'ont plus de raison
+  // d'être après le TTL et ne doivent pas s'accumuler.
+  if (sessionResetMarkers.size > 0) {
+    for (const [sessionId, markerTime] of sessionResetMarkers) {
+      if (!conversations.has(sessionId) && now - markerTime > CONVERSATION_TTL) {
+        sessionResetMarkers.delete(sessionId);
+      }
     }
   }
 }, 30 * 60 * 1000);
@@ -590,9 +605,11 @@ app.get("/api/admin/settings", requireAdmin, (req, res) => {
 
     customApiKey: maskKey(settings.customApiKey),
     hasCustomApiKey: !!settings.customApiKey,
-    // Faux si le dossier data/ n'a pas survécu au dernier redémarrage (stockage
-    // éphémère) : l'admin affiche alors une bannière d'avertissement.
-    storagePersistent: isStoragePersistent()
+    // État du stockage : l'admin affiche une bannière JUSTIFIÉE selon le cas
+    // (stockage confirmé / premier démarrage / clés en variables d'env /
+    // stockage éphémère) au lieu d'un simple binaire figé au démarrage.
+    storagePersistent: isStoragePersistent(),
+    storage: getStorageStatus()
   });
 });
 
@@ -924,7 +941,7 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
     let siteExplored = false;
     let queryEmbedding = null;
     if (!conversational) {
-      const { documents, chunkEntries } = getRagContext();
+      const { documents, chunkEntries, chunkIndex } = getRagContext();
       queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
         ? await generateEmbedding(message).catch(() => null)
         : null;
@@ -933,7 +950,7 @@ app.post("/api/chat", widgetCors, chatLimiter, async (req, res) => {
         usedVectorSearch = relevantChunks.length > 0;
       }
       if (relevantChunks.length === 0) {
-        relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
+        relevantChunks = retrieveRelevantChunksSync(documents, message, 4, chunkIndex);
       }
       contextBlock = buildContextBlock(relevantChunks);
 
@@ -1114,7 +1131,7 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
     let siteExplored = false;
     let queryEmbedding = null;
     if (!conversational) {
-      const { documents, chunkEntries } = getRagContext();
+      const { documents, chunkEntries, chunkIndex } = getRagContext();
       queryEmbedding = chunkEntries.length > 0 && chunkEntries.some(e => e.embedding)
         ? await generateEmbedding(message).catch(() => null)
         : null;
@@ -1123,7 +1140,7 @@ app.post("/api/chat/stream", widgetCors, chatLimiter, async (req, res) => {
         usedVectorSearch = relevantChunks.length > 0;
       }
       if (relevantChunks.length === 0) {
-        relevantChunks = retrieveRelevantChunksSync(documents, message, 4);
+        relevantChunks = retrieveRelevantChunksSync(documents, message, 4, chunkIndex);
       }
       contextBlock = buildContextBlock(relevantChunks);
 
@@ -1287,6 +1304,15 @@ app.get("/api/health", (req, res) => {
     version: "1.0.0",
     embedding: typeof ensureEmbeddingModel === "function" // vérifie que le module est accessible
   });
+});
+
+// Keep-alive dédié (anti-veille) : réponse VIDE (204) sans aucun calcul ni
+// JSON — le plus léger possible. Réservé au self-ping du serveur lui-même
+// (et à un éventuel moniteur externe). /api/health reste le health check
+// « riche » pour l'infra (load balancer, healthcheck Docker/Render).
+const KEEPALIVE_PATH = "/api/keepalive"; // partagé avec le self-ping anti-veille
+app.get(KEEPALIVE_PATH, (req, res) => {
+  res.status(204).end();
 });
 
 // ─── Suivi de la propagation de la config vers les widgets ─────────────
@@ -1560,9 +1586,10 @@ async function getSiteContextBlock(settings, siteUrl, message) {
   }
 }
 
-// Cache RAG : documents + chunks chargés en mémoire ────────────────
-// Évite de relire data/store.json à chaque requête chat
-let ragCache = { documents: null, chunks: [], lastReload: 0 };
+// Cache RAG : documents + chunks + index mots-clés chargés en mémoire ──
+// Évite de relire data/store.json à chaque requête chat, et évite de
+// RE-TOKENISER tous les chunks à chaque message (coût CPU sur gros corpus).
+let ragCache = { documents: null, chunks: [], index: [], lastReload: 0 };
 const RAG_CACHE_TTL = 5000; // 5 secondes entre chaque rechargement
 
 function getRagContext() {
@@ -1570,7 +1597,10 @@ function getRagContext() {
   if (!ragCache.documents || now - ragCache.lastReload > RAG_CACHE_TTL) {
     ragCache.documents = getDocuments();
     ragCache.lastReload = now;
-    // Pré-construit la liste plate chunks + titres pour la recherche
+    // Pré-construit la liste plate chunks + titres + embeddings pour la
+    // recherche vectorielle, ET l'index tokenisé pour la recherche mots-clés
+    // (buildChunkIndex est peu coûteux en mémoire : une Map de fréquences
+    // par chunk, reconstruite seulement toutes les 5 s ou au changement).
     const entries = [];
     for (const doc of ragCache.documents) {
       if (doc.chunks) {
@@ -1584,8 +1614,9 @@ function getRagContext() {
       }
     }
     ragCache.chunks = entries;
+    ragCache.index = buildChunkIndex(ragCache.documents);
   }
-  return { documents: ragCache.documents, chunkEntries: ragCache.chunks };
+  return { documents: ragCache.documents, chunkEntries: ragCache.chunks, chunkIndex: ragCache.index };
 }
 
 // Cache pour les suggestions : générées avec l'IA toutes les 10 minutes,
@@ -1928,8 +1959,12 @@ const server = app.listen(PORT, () => {
 // LUI-MÊME sur son URL publique : le trafic entrant régulier empêche la
 // mise en veille, sans aucune dépendance externe. La requête passe par le
 // reverse proxy de la plateforme → elle compte comme du trafic réel.
-// Activation : définir PUBLIC_URL (ex. https://chatbot-aida.onrender.com).
-const PUBLIC_URL = (process.env.PUBLIC_URL || "").replace(/\/+$/, "");
+// Activation : PUBLIC_URL explicite (ex. https://chatbot-aida.onrender.com),
+// SINON RENDER_EXTERNAL_URL — injecté AUTOMATIQUEMENT par Render sur chaque
+// web service (https://mon-app.onrender.com). Ce fallback rend l'anti-veille
+// actif dès le déploiement via le Blueprint, sans aucune saisie manuelle.
+// Autres plateformes (Railway…) : définir PUBLIC_URL.
+const PUBLIC_URL = (process.env.PUBLIC_URL || process.env.RENDER_EXTERNAL_URL || "").replace(/\/+$/, "");
 const KEEP_AWAKE_INTERVAL_MS = Math.max(
   Number(process.env.KEEP_AWAKE_INTERVAL_MS) || 5 * 60 * 1000,
   5 * 1000 // garde-fou : jamais plus fréquent qu'une tentative toutes les 5 s
@@ -1943,11 +1978,11 @@ if (PUBLIC_URL) {
   const intervalLabel = KEEP_AWAKE_INTERVAL_MS < 60000
     ? `${Math.round(KEEP_AWAKE_INTERVAL_MS / 1000)} s`
     : `${Math.round(KEEP_AWAKE_INTERVAL_MS / 60000)} min`;
-  console.log(`⏰ Anti-veille actif : self-ping ${PUBLIC_URL}/api/health toutes les ${intervalLabel}`);
+  console.log(`⏰ Anti-veille actif : self-ping ${PUBLIC_URL}${KEEPALIVE_PATH} toutes les ${intervalLabel}`);
   let consecutiveFailures = 0;
   const keepAwakePing = async () => {
     try {
-      const res = await fetch(`${PUBLIC_URL}/api/health`, {
+      const res = await fetch(`${PUBLIC_URL}${KEEPALIVE_PATH}`, {
         signal: AbortSignal.timeout(15000)
       });
       if (!res.ok) throw new Error(`HTTP ${res.status}`);
@@ -1966,5 +2001,5 @@ if (PUBLIC_URL) {
   keepAwakeTimeout = setTimeout(keepAwakePing, 30 * 1000);
   keepAwakeInterval = setInterval(keepAwakePing, KEEP_AWAKE_INTERVAL_MS);
 } else {
-  console.log("ℹ️ Anti-veille désactivé (PUBLIC_URL non définie). Sur les plans gratuits, le service peut se mettre en veille après ~15 min d'inactivité.");
+  console.log("ℹ️ Anti-veille désactivé (ni PUBLIC_URL ni RENDER_EXTERNAL_URL définies). Sur les plans gratuits, le service peut se mettre en veille après ~15 min d'inactivité.");
 }

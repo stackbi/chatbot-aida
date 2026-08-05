@@ -31,7 +31,11 @@ services:
         sync: false          # secret, saisi à la création du blueprint
       - key: TRUST_PROXY
         value: "1"           # Render place un reverse proxy devant le conteneur
-      # URL publique du service (anti-veille intégré) : à renseigner avec
-      # l'URL Render du service, ex. https://chatbot-aida.onrender.com
+      # URL publique du service (anti-veille intégré). Valeur par défaut :
+      # l'URL onrender.com de CE service (sans slash final). L'anti-veille
+      # s'active alors automatiquement au déploiement via le Blueprint.
+      # ⚠️ Cette valeur doit correspondre EXACTEMENT à l'URL actuelle du
+      # service (elle prime sur le fallback RENDER_EXTERNAL_URL) : si Render
+      # réattribue le sous-domaine ou renomme le service, mets-la à jour.
       - key: PUBLIC_URL
-        sync: false           # saisie dans le dashboard Render (var. d'env.)
+        value: https://chatbot-aida.onrender.com

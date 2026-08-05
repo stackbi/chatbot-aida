@@ -621,6 +621,26 @@
     margin-bottom: 2px;
     color: #78350f;
   }
+  /* Variantes : stockage confirmé (vert) / clés en env vars (bleu) /
+     premier démarrage (neutre) — la classe est posée par le JS. */
+  .storage-warning.ok {
+    background: var(--success-bg);
+    border-color: rgba(16, 185, 129, 0.3);
+    color: #065f46;
+  }
+  .storage-warning.ok strong { color: #065f46; }
+  .storage-warning.ok code {
+    background: rgba(16, 185, 129, 0.14);
+  }
+  .storage-warning.info {
+    background: #eff6ff;
+    border-color: rgba(59, 130, 246, 0.35);
+    color: #1e40af;
+  }
+  .storage-warning.info strong { color: #1e3a8a; }
+  .storage-warning.info code {
+    background: rgba(59, 130, 246, 0.14);
+  }
 
   /* ── Indicateur de modèle actif ── */
   .model-badge {
@@ -767,12 +787,12 @@
 
     <!-- ── Onglet Paramètres ── -->
     <div class="tab-panel active" id="tab-settings">
-      <!-- Bannière : stockage local non persistant (clé API effacée au redémarrage) -->
+      <!-- Bannière : état du stockage (remplie par JS selon le cas réel) -->
       <div class="storage-warning" id="storage-warning">
-        <span style="font-size:1rem;flex-shrink:0;">⚠️</span>
+        <span style="font-size:1rem;flex-shrink:0;" id="storage-warning-icon">⚠️</span>
         <div>
-          <strong>Stockage non persistant</strong>
-          Votre clé API et vos documents risquent d'être effacés au prochain redémarrage du serveur : le dossier <code>data/</code> n'a pas survécu au dernier redémarrage. Montez un volume persistant sur <code>data/</code>, ou définissez la variable d'environnement <code>DATA_DIR</code> vers un volume persistant. Alternative : définissez vos clés via les variables d'environnement <code>OPENROUTER_API_KEY</code>, <code>GROQ_API_KEY</code>, <code>OPENAI_API_KEY</code> ou <code>CUSTOM_API_KEY</code> — elles survivent à tous les redémarrages.
+          <strong id="storage-warning-title">Stockage</strong>
+          <span id="storage-warning-body"></span>
         </div>
       </div>
 
@@ -1273,9 +1293,39 @@
         return false;
       }
 
-      // Bannière de persistance : visible si le stockage n'a pas survécu au dernier redémarrage
+      // Bannière de persistance : message adapté à l'état RÉEL du stockage.
+      // - stockage confirmé (marqueur survécu) → masquée
+      // - clés en variables d'environnement → info bleue (clés survivantes)
+      // - premier démarrage → info neutre (rien à perdre encore)
+      // - stockage éphémère avec données → alerte (risque réel de perte)
       const storageWarning = document.getElementById('storage-warning');
-      if (storageWarning) storageWarning.style.display = s.storagePersistent === false ? 'flex' : 'none';
+      if (storageWarning) {
+        const st = s.storage || {};
+        const icon = document.getElementById('storage-warning-icon');
+        const title = document.getElementById('storage-warning-title');
+        const body = document.getElementById('storage-warning-body');
+        if (st.persistent) {
+          storageWarning.style.display = 'none';
+        } else if (st.hasEnvApiKeys) {
+          storageWarning.style.display = 'flex';
+          storageWarning.className = 'storage-warning ok';
+          icon.textContent = '✅';
+          title.textContent = 'Clés API sécurisées par variables d\'environnement';
+          body.innerHTML = 'Vos clés sont définies dans les variables d\'environnement (<code>OPENROUTER_API_KEY</code>, <code>GROQ_API_KEY</code>…) : elles <strong>survivent à tous les redémarrages et redéploiements</strong>. Seuls les documents de la base de connaissances seront perdus si le stockage local est éphémère (plan gratuit sans volume). Pour les conserver, montez un volume persistant sur <code>data/</code> (plan payant).';
+        } else if (st.firstBoot) {
+          storageWarning.style.display = 'flex';
+          storageWarning.className = 'storage-warning info';
+          icon.textContent = 'ℹ️';
+          title.textContent = 'Premier démarrage — persistance non encore confirmée';
+          body.innerHTML = 'Aucune donnée n\'a encore été perdue : la persistance sera confirmée au prochain redémarrage du serveur. ⚠️ Sur les plans gratuits (Render free, Railway free…) le dossier <code>data/</code> est <strong>effacé à chaque redéploiement</strong> — pour que vos clés survivent, définissez-les dans les variables d\'environnement <code>OPENROUTER_API_KEY</code>, <code>GROQ_API_KEY</code>, <code>OPENAI_API_KEY</code> ou <code>CUSTOM_API_KEY</code>.';
+        } else {
+          storageWarning.style.display = 'flex';
+          storageWarning.className = 'storage-warning';
+          icon.textContent = '⚠️';
+          title.textContent = 'Stockage non persistant';
+          body.innerHTML = 'Votre clé API et vos documents risquent d\'être effacés au prochain redémarrage du serveur : le dossier <code>data/</code> n\'a pas survécu au dernier redémarrage. Montez un volume persistant sur <code>data/</code>, ou définissez la variable d\'environnement <code>DATA_DIR</code> vers un volume persistant. Alternative : définissez vos clés via les variables d\'environnement <code>OPENROUTER_API_KEY</code>, <code>GROQ_API_KEY</code>, <code>OPENAI_API_KEY</code> ou <code>CUSTOM_API_KEY</code> — elles survivent à tous les redémarrages.';
+        }
+      }
 
       // Groq key
       document.getElementById('set-groq-apikey').value = '';
