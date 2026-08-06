@@ -294,8 +294,8 @@ C'est tout — aucune autre étape. Le widget va automatiquement :
 ```html
 <script src="https://mon-chatbot.../widget.js"
         data-position="left"                    # position : "left" ou "right" (défaut)
-        data-accent-color="#6c63ff"             # couleur principale
-        data-accent-color-dark="#4a42cc"        # couleur de survol
+        data-accent-color="#e1ae07ff"             # couleur principale
+        data-accent-color-dark="#93e140ff"        # couleur de survol
         defer></script>
 ```
 
